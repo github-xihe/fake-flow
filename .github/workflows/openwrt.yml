@@ -5,6 +5,7 @@ on:
       - 'ebpf/**'
       - 'config/**'
       - 'packaging/openwrt/**'
+      - 'tests/openwrt_vm.py'
       - '.github/workflows/openwrt.yml'
       - 'Makefile'
   workflow_dispatch:
@@ -24,7 +25,7 @@ jobs:
       - name: Install SDK prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential clang llvm flex bison gawk gettext libncurses-dev libssl-dev python3-setuptools rsync swig unzip zstd file wget
+          sudo apt-get install -y --no-install-recommends build-essential clang llvm flex bison gawk gettext libncurses-dev libssl-dev python3-setuptools python3-pexpect qemu-system-x86 rsync swig unzip zstd file wget
       - uses: actions/cache/restore@v4
         id: sdk-cache
         with:
@@ -96,8 +97,16 @@ jobs:
             -v "$GITHUB_WORKSPACE/dist:/packages:ro" \
             -v "$GITHUB_WORKSPACE/packaging/openwrt/smoke-test.sh:/smoke-test.sh:ro" \
             fakeflow-openwrt:test /bin/sh /smoke-test.sh
+      - name: Load package on OpenWrt Linux 6.6 in QEMU
+        run: |
+          curl -fL --retry 3 "https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64/openwrt-$OPENWRT_VERSION-x86-64-generic-ext4-combined.img.gz" -o "$RUNNER_TEMP/openwrt.img.gz"
+          echo "5b854a7a2909a0b21887ba9be773b0964eb28fef81d6b8399d32a0f270a5d8ff  $RUNNER_TEMP/openwrt.img.gz" | sha256sum -c -
+          gzip -dc "$RUNNER_TEMP/openwrt.img.gz" > "$RUNNER_TEMP/openwrt.img"
+          /usr/bin/python3 tests/openwrt_vm.py "$RUNNER_TEMP/openwrt.img" dist
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: openwrt-build-log
-          path: ${{ runner.temp }}/openwrt-build.log
+          path: |
+            ${{ runner.temp }}/openwrt-build.log
+            build/openwrt-vm.log

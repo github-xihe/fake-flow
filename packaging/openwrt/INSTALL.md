@@ -8,7 +8,7 @@ BUILD.txt 记录源码提交，SHA256SUMS 用于校验包文件。
 
 ```sh
 opkg update
-opkg install /tmp/fakeflow_0.1.0-r1_x86_64.ipk
+opkg install /tmp/fakeflow_0.1.0-r2_x86_64.ipk
 ```
 
 程序包声明 libbpf、libelf、zlib、ip-full、tc-full 用户态依赖，由 opkg

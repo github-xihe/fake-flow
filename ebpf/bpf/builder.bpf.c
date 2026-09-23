@@ -34,8 +34,11 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         oldsum=bpf_csum_diff(0,0,(__be32*)block,64,oldsum);
     }
     __u8 eth[32]={},ip[40]={},th[20]={};
-    __u32 l2len=p.l3&31;
-    if(l2len && bpf_skb_load_bytes(skb,0,eth,l2len)) return -1;
+    /* Older verifiers lose the nonzero bound when an ALU32 length is spilled
+     * before its check and reloaded for a helper. Use constant helper sizes.
+     * parse() guarantees at least 14 L2 + 20 IP + 8 transport bytes on L2
+     * paths, so reading 32 bytes is safe; only the L2 prefix is written back. */
+    if(p.l3 && bpf_skb_load_bytes(skb,0,eth,sizeof(eth))) return -1;
     if(bpf_skb_load_bytes(skb,p.l3,ip,iplen)) return -1;
     if(r->reverse && p.l3) {
         __builtin_memcpy(eth,p.eth+6,6);__builtin_memcpy(eth+6,p.eth,6);
@@ -80,7 +83,16 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     __u64 delta=(__u64)(~oldsum)+newsum;
     delta=(delta&0xffffffff)+(delta>>32);
     if(bpf_skb_change_tail(skb,length,0)) return -1;
-    if(l2len && bpf_skb_store_bytes(skb,0,eth,l2len,BPF_F_RECOMPUTE_CSUM)) return -1;
+    if(p.l3) {
+        if(bpf_skb_store_bytes(skb,0,eth,14,BPF_F_RECOMPUTE_CSUM)) return -1;
+        /* Supported L2 sizes: 14/18/22/26/30 (Ethernet, VLAN, PPPoE).
+         * Keep each VLAN/PPPoE chunk constant even on kernels that cannot
+         * propagate scalar range refinement back to a 32-bit stack spill. */
+#pragma unroll
+        for(int off=14;off<30;off+=4) {
+            if(p.l3>=off+4 && bpf_skb_store_bytes(skb,off,eth+off,4,BPF_F_RECOMPUTE_CSUM)) return -1;
+        }
+    }
     if(bpf_skb_store_bytes(skb,p.l3,ip,iplen,BPF_F_RECOMPUTE_CSUM) ||
        bpf_skb_store_bytes(skb,p.l4,th,thlen,BPF_F_RECOMPUTE_CSUM) ||
        bpf_skb_store_bytes(skb,p.l4+thlen,t->data,payload,BPF_F_RECOMPUTE_CSUM)) return -1;
