@@ -19,7 +19,7 @@ def run(*args, check=True):
     return p
 
 def inside():
-    from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, AsyncSniffer, sendp
+    from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, AsyncSniffer, sendp, PPPoE, PPP, Dot1Q
     from scapy.layers.inet import in4_chksum
     from scapy.layers.inet6 import in6_chksum
     from scapy.utils import checksum
@@ -35,8 +35,10 @@ def inside():
         config = tmp / "test.toml"
         text = (ROOT / "config/fakeflow.toml").read_text().replace('"eth1"', '"wan"')
         text = text.replace("allow_private = false", "allow_private = true").replace("lease_seconds = 10", "lease_seconds = 4")
+        if "--pppoe" in sys.argv:
+            text = text.replace('"ethernet"', '"pppoe"')
         config.write_text(text)
-        logpath = ROOT / "build/protocol-daemon.log"
+        logpath = ROOT / ("build/pppoe-daemon.log" if "--pppoe" in sys.argv else "build/protocol-daemon.log")
         log = logpath.open("w")
         process = sp.Popen([str(BIN), "run", "--config", str(config), "--object", str(ROOT / "build/fakeflow.bpf.o"), "--runtime-dir", str(tmp / "run")], stdout=log, stderr=log)
         def command(name, check=True):
@@ -51,7 +53,10 @@ def inside():
             ips = ("2001:db8::1", "2001:db8::2") if ipv6 else ("198.18.0.1", "198.18.0.2")
             src, dst = ips[::-1] if inbound else ips
             ip = IPv6(src=src, dst=dst, hlim=50) if ipv6 else IP(src=src, dst=dst, ttl=50)
-            return Ether(src=remote_mac if inbound else local_mac, dst=local_mac if inbound else remote_mac) / ip / transport
+            eth = Ether(src=remote_mac if inbound else local_mac, dst=local_mac if inbound else remote_mac)
+            if "--pppoe" in sys.argv:
+                return eth / Dot1Q(vlan=100) / PPPoE(sessionid=123) / PPP(proto=0x57 if ipv6 else 0x21) / ip / transport
+            return eth / ip / transport
         def verify(packet):
             net = packet[IP] if IP in packet else packet[IPv6]
             transport = packet[TCP] if TCP in packet else packet[UDP]
@@ -173,6 +178,6 @@ if __name__ == "__main__":
         ns=f"ff-protocol-{os.getpid()}"
         run("ip","netns","add",ns)
         try:
-            sp.run(["ip","netns","exec",ns,sys.executable,str(Path(__file__).resolve()),"--inside"],check=True)
+            sp.run(["ip","netns","exec",ns,sys.executable,str(Path(__file__).resolve()),"--inside"] + (["--pppoe"] if "--pppoe" in sys.argv else []),check=True)
         finally:
             run("ip","netns","del",ns)

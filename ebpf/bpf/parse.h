@@ -69,7 +69,9 @@ static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *ifac
         p->hlen=8;__builtin_memcpy(&p->checksum,h+6,2);
         if(p->key.family==6 && !p->checksum) return -1;
     } else return -1;
-    p->key.local_port=read16(h+(in?2:0));p->key.remote_port=read16(h+(in?0:2));
+    __u16 source_port=read16(h),destination_port=read16(h+2);
+    p->key.local_port=in?destination_port:source_port;
+    p->key.remote_port=in?source_port:destination_port;
     p->bytes=p->end-p->l4-p->hlen;
     return 0;
 }

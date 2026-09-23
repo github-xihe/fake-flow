@@ -19,6 +19,10 @@ jobs:
         run: sudo /usr/bin/python3 tests/netns/p0.py
       - name: Protocol and lifecycle integration
         run: sudo /usr/bin/python3 tests/netns/protocols.py
+      - name: L3 TUN integration
+        run: sudo /usr/bin/python3 tests/netns/l3.py
+      - name: PPPoE and VLAN integration
+        run: sudo /usr/bin/python3 tests/netns/protocols.py --pppoe
       - uses: actions/upload-artifact@v4
         if: always()
         with:
