@@ -32,7 +32,7 @@ jobs:
           echo "$SDK_SHA256  $RUNNER_TEMP/sdk.tar.zst" | sha256sum -c -
           mkdir "$RUNNER_TEMP/sdk"
           tar --zstd -xf "$RUNNER_TEMP/sdk.tar.zst" --strip-components=1 -C "$RUNNER_TEMP/sdk"
-          curl -fL --retry 3 "$base/rootfs.tar.gz" -o "$RUNNER_TEMP/rootfs.tar.gz"
+          curl -fL --retry 3 "$base/openwrt-$OPENWRT_VERSION-x86-64-rootfs.tar.gz" -o "$RUNNER_TEMP/rootfs.tar.gz"
           echo "$ROOTFS_SHA256  $RUNNER_TEMP/rootfs.tar.gz" | sha256sum -c -
       - name: Configure SDK
         working-directory: ${{ runner.temp }}/sdk

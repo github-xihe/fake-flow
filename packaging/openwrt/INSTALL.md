@@ -21,9 +21,11 @@ opkg install /tmp/fakeflow_0.1.0-1_x86_64.ipk
 opkg install kmod-sched-bpf kmod-dummy kmod-tun
 ```
 
-如果 OpenWrt 是 PVE 的 LXC 容器，内核模块由 PVE 宿主机提供，不要在
-容器里安装 OpenWrt kmod；宿主机与容器权限必须允许 BPF、TC 和所需设备。
-安装包成功不代表容器具备这些权限，实际以 run 的加载结果为准。
+如果 OpenWrt 是 PVE 的 LXC 容器，运行内核模块由 PVE 宿主机提供。
+注意官方 tc-full 自身仍间接依赖 kmod-sched-core，因此本包并非完全免
+内核包依赖的 LXC 专用包。如果 opkg 报 kernel 依赖不匹配，应先解决
+容器软件源/工具包适配，不要强制安装。宿主机与容器权限必须允许 BPF、
+TC 和所需设备。安装包成功不代表具备这些权限，以 run 的加载结果为准。
 
 编辑 /etc/fakeflow.toml 中现有的 [[interfaces]]，不要重复追加同一接口。
 普通 IP 网口使用 ethernet；物理口承载 PPPoE 时例如：
