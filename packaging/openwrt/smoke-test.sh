@@ -4,6 +4,7 @@ set -eu
 mkdir -p /var/lock /var/run
 opkg update
 opkg install /packages/fakeflow_*.ipk
+test "$(uci -q get fakeflow.main.enabled)" = 0
 fakeflow validate --config /etc/fakeflow.toml
 sed -i 's/name = "eth1"/name = "eth0"/' /etc/fakeflow.toml
 fakeflow check --config /etc/fakeflow.toml

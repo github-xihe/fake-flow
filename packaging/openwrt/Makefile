@@ -26,6 +26,7 @@ endef
 
 define Package/fakeflow/conffiles
 /etc/fakeflow.toml
+/etc/config/fakeflow
 endef
 
 define Build/Prepare
@@ -46,10 +47,11 @@ define Build/Compile
 endef
 
 define Package/fakeflow/install
-	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/lib/fakeflow $(1)/etc/init.d
+	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/lib/fakeflow $(1)/etc/init.d $(1)/etc/config
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/build/fakeflow $(1)/usr/sbin/
 	$(INSTALL_DATA) $(PKG_BUILD_DIR)/build/fakeflow.bpf.o $(1)/usr/lib/fakeflow/
 	$(INSTALL_CONF) $(PKG_BUILD_DIR)/config/fakeflow.toml $(1)/etc/fakeflow.toml
+	$(INSTALL_CONF) $(PKG_BUILD_DIR)/packaging/openwrt/fakeflow.config $(1)/etc/config/fakeflow
 	$(INSTALL_BIN) $(PKG_BUILD_DIR)/packaging/openwrt/fakeflow.init $(1)/etc/init.d/fakeflow
 endef
 

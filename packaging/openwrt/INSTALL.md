@@ -13,6 +13,8 @@ opkg install /tmp/fakeflow_0.1.0-r1_x86_64.ipk
 
 程序包声明 libbpf、libelf、zlib、ip-full、tc-full 用户态依赖，由 opkg
 从当前设备的软件源安装。不要使用 --force-depends。
+默认 UCI 服务开关为关闭，即使安装过程调用 init 脚本也不会加载程序。
+先按下文配置并前台验证。
 
 运行内核需要 BPF syscall、TC BPF/clsact、dummy，L3 模式还需要 TUN。
 原生 OpenWrt（含完整虚拟机）从与当前固件内核匹配的软件源安装：
@@ -49,13 +51,16 @@ fakeflow run --config /etc/fakeflow.toml
 前台实例可用 Ctrl+C 或 fakeflow stop 停止。确认正常并停止前台实例后：
 
 ```sh
+uci set fakeflow.main.enabled='1'
+uci commit fakeflow
 /etc/init.d/fakeflow enable
 /etc/init.d/fakeflow start
 logread -e fakeflow
 ```
 
 由服务管理时用 /etc/init.d/fakeflow stop 停止，避免 procd 自动重启进程。
-禁用开机启动使用 /etc/init.d/fakeflow disable。
+禁用开机启动使用 /etc/init.d/fakeflow disable；持久关闭服务开关可执行
+uci set fakeflow.main.enabled='0' 和 uci commit fakeflow。
 
 CI 在官方 OpenWrt rootfs 中安装包、解析配置，并在 runner 内核上加载
 BPF、挂载 TC 和检查退出清理。这不等于已验证 OpenWrt 6.6/PVE 内核、
