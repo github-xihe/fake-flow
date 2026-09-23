@@ -71,6 +71,7 @@ static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,st
             f->syn_seq=p->seq;f->syn_bytes=p->bytes;f->active=!in;
             f->stopped=0;f->batches=0;f->emitted=0;
         } else if(f->active!=!in) f->stopped=1; /* simultaneous open */
+        if(f->syn_seq==p->seq && p->bytes>f->syn_bytes) f->syn_bytes=p->bytes;
         if(rejected) f->stopped=1;
         f->seen=now;if(in) f->remote_ttl=p->ttl;
         bpf_spin_unlock(&lock->lock);

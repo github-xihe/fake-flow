@@ -32,7 +32,8 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
     __u64 *seq=bpf_map_lookup_elem(&sequence,&z);
     if(!seq) return 0;
     __u32 saved[5];
-    __builtin_memcpy(saved,skb->cb,sizeof(saved));
+    saved[0]=skb->cb[0];saved[1]=skb->cb[1];saved[2]=skb->cb[2];
+    saved[3]=skb->cb[3];saved[4]=skb->cb[4];
     for(int i=0;i<8;i++) {
         if(i>=c->repeat) break;
         stat(FF_ATTEMPT);
@@ -44,7 +45,7 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
         if(bpf_map_update_elem(&requests,&id,&r,BPF_NOEXIST)) {stat(FF_MAP_FAILED);continue;}
         skb->cb[0]=id;skb->cb[1]=id>>32;
         long rc=bpf_clone_redirect(skb,iface->builder,0);
-        __builtin_memcpy(skb->cb,saved,sizeof(saved));
+        skb->cb[0]=saved[0];skb->cb[1]=saved[1];
         struct ff_request *result=bpf_map_lookup_elem(&requests,&id);
         if(rc) stat(FF_CLONE_FAILED);
         else if(result && result->state==3) stat(FF_SUBMIT_OK);
@@ -60,7 +61,8 @@ static __always_inline int observe(struct __sk_buff *skb,int in) {
         __u32 idx=skb->ifindex;
         struct ff_interface *iface=bpf_map_lookup_elem(&interfaces,&idx);
         if(!iface || iface->generation!=r->ifgen || __sync_val_compare_and_swap(&r->state,2,3)!=2) return TC_ACT_SHOT;
-        __builtin_memcpy(skb->cb,r->saved_cb,sizeof(r->saved_cb));
+        skb->cb[0]=r->saved_cb[0];skb->cb[1]=r->saved_cb[1];
+        skb->cb[2]=r->saved_cb[2];skb->cb[3]=r->saved_cb[3];skb->cb[4]=r->saved_cb[4];
         stat(FF_INTERNAL);return TC_ACT_UNSPEC;
     }
     __u64 now=bpf_ktime_get_ns();

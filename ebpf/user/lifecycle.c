@@ -13,6 +13,7 @@
 #include <string.h>
 #include <sys/file.h>
 #include <sys/resource.h>
+#include <sys/random.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/un.h>
@@ -222,6 +223,9 @@ int ff_run(const char *path,const char *object,const char *runtime) {
     bpf_map__set_max_entries(bpf_object__find_map_by_name(r.obj,"tcp_flows"),r.options.tcp_entries);
     bpf_map__set_max_entries(bpf_object__find_map_by_name(r.obj,"udp_flows"),r.options.udp_entries);
     if(bpf_object__load(r.obj))goto out;
+    __u64 seed;unsigned zero=0;
+    if(getrandom(&seed,sizeof(seed),0)!=(ssize_t)sizeof(seed) ||
+       bpf_map_update_elem(map(&r,"sequence"),&zero,&seed,BPF_ANY))goto out;
     /* Disable modifications until every private and WAN filter is ready. */
     if(lease(&r,0))goto out;
     if(ff_dummy(r.dummy,sizeof(r.dummy))) {r.dummy[0]=0;goto out;}
