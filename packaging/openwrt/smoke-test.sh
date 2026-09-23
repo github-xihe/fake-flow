@@ -1,6 +1,7 @@
 #!/bin/sh
 # Run only inside the disposable CI OpenWrt container.
 set -eu
+mkdir -p /var/lock /var/run
 opkg update
 opkg install /packages/fakeflow_*.ipk
 fakeflow validate --config /etc/fakeflow.toml

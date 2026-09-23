@@ -25,7 +25,15 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends build-essential clang llvm flex bison gawk gettext libncurses-dev libssl-dev python3-setuptools rsync swig unzip zstd file wget
+      - uses: actions/cache/restore@v4
+        id: sdk-cache
+        with:
+          path: |
+            ${{ runner.temp }}/sdk
+            ${{ runner.temp }}/rootfs.tar.gz
+          key: openwrt-24.10.5-x86_64-sdk-deps-v1
       - name: Download and verify SDK and test rootfs
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
           base="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64"
           curl -fL --retry 3 "$base/$SDK_FILE" -o "$RUNNER_TEMP/sdk.tar.zst"
@@ -37,8 +45,13 @@ jobs:
       - name: Configure SDK
         working-directory: ${{ runner.temp }}/sdk
         run: |
-          ./scripts/feeds update -a
-          ./scripts/feeds install libbpf elfutils zlib iproute2
+          if [ ! -d feeds/base ]; then
+            ./scripts/feeds update -a
+            ./scripts/feeds install libbpf elfutils zlib iproute2
+          fi
+          if [ -f package/fakeflow/Makefile ]; then
+            make package/fakeflow/clean
+          fi
           mkdir -p package/fakeflow/src
           git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
           cp "$GITHUB_WORKSPACE/packaging/openwrt/Makefile" package/fakeflow/Makefile
@@ -55,6 +68,13 @@ jobs:
         run: |
           set -o pipefail
           make -j2 package/fakeflow/compile V=s BPF_CLANG=clang 2>&1 | tee "$RUNNER_TEMP/openwrt-build.log"
+      - uses: actions/cache/save@v4
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ${{ runner.temp }}/sdk
+            ${{ runner.temp }}/rootfs.tar.gz
+          key: openwrt-24.10.5-x86_64-sdk-deps-v1
       - name: Collect package
         run: |
           mkdir -p dist
@@ -64,6 +84,11 @@ jobs:
           printf 'OpenWrt SDK: %s\nTarget: x86/64 (x86_64, musl)\nSource: %s\n' "$OPENWRT_VERSION" "$GITHUB_SHA" > dist/BUILD.txt
           cd dist
           sha256sum *.ipk > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fakeflow-openwrt-24.10-x86_64
+          path: dist/
+          if-no-files-found: error
       - name: Install and load BPF in OpenWrt userspace
         run: |
           docker import "$RUNNER_TEMP/rootfs.tar.gz" fakeflow-openwrt:test
@@ -71,11 +96,6 @@ jobs:
             -v "$GITHUB_WORKSPACE/dist:/packages:ro" \
             -v "$GITHUB_WORKSPACE/packaging/openwrt/smoke-test.sh:/smoke-test.sh:ro" \
             fakeflow-openwrt:test /bin/sh /smoke-test.sh
-      - uses: actions/upload-artifact@v4
-        with:
-          name: fakeflow-openwrt-24.10-x86_64
-          path: dist/
-          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:

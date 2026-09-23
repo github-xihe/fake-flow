@@ -75,7 +75,7 @@ TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据�
 ## 部署与测试
 
 - [systemd unit](packaging/systemd/fakeflow.service)：安装到 `/etc/systemd/system/` 后按通常方式启用。
-- [OpenWrt SDK 包](packaging/openwrt/Makefile) 与 [procd 脚本](packaging/openwrt/fakeflow.init)：属于实机验证前的打包入口，需匹配目标 SDK 的 libbpf、内核和 LLVM。
+- OpenWrt 24.10 x86_64 安装包由 [OpenWrt 打包工作流](https://github.com/lilu0826/fake-flow/actions/workflows/openwrt.yml) 使用官方 24.10.5 SDK 构建。成功运行的 `fakeflow-openwrt-24.10-x86_64` artifact 包含 `.ipk`、校验值与安装说明；详见 [安装指南](packaging/openwrt/INSTALL.md)。其他架构需使用匹配的 SDK 重新构建。
 - `pppoe-wan` 通常使用 `l3`；底层承载 PPPoE 的物理口使用 `pppoe`。不能同时处理同一逻辑/物理路径，当前实例保守拒绝混合配置 `l3` 和 `pppoe`。
 - 程序使用 TC priority 1；该优先级已有过滤器时拒绝启动并报告冲突。停止后保留 clsact，避免误删其他程序在运行期间添加的过滤器。
 
