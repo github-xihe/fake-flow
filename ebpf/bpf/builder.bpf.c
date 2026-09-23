@@ -7,12 +7,16 @@ static __always_inline __u16 fold_checksum(__u64 sum) {
     return ~sum;
 }
 static __noinline int store_payload(struct __sk_buff *skb,__u32 off,const void *data,__u64 bytes) {
-    /* Keep both bounds in the helper's call frame. Pre-6.9 verifiers do not
-     * reliably recover a bound from a length spilled much earlier in build().
-     * The barrier prevents LLVM merging the checks into bytes-1 arithmetic. */
-    if(bytes>FF_PAYLOAD_MAX) return -1;
+    /* Keep the range proof in this frame. Barriers prevent LLVM from removing
+     * checks using the caller's bounds, which older verifiers lose on spills.
+     * Reconstruct 1..MAX from a proven 0..MAX-1 range: on Linux 6.6 merely
+     * excluding zero with JEQ does not establish a positive unsigned bound. */
     asm volatile("" : "+r"(bytes));
-    if(!bytes) return -1;
+    bytes--;
+    asm volatile("" : "+r"(bytes));
+    if(bytes>=FF_PAYLOAD_MAX) return -1;
+    asm volatile("" : "+r"(bytes));
+    bytes++;
     return bpf_skb_store_bytes(skb,off,data,bytes,BPF_F_RECOMPUTE_CSUM);
 }
 static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff_interface *iface) {
