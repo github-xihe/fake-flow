@@ -6,6 +6,15 @@ static __always_inline __u16 fold_checksum(__u64 sum) {
     sum=(sum&0xffff)+(sum>>16);sum=(sum&0xffff)+(sum>>16);
     return ~sum;
 }
+static __noinline int store_payload(struct __sk_buff *skb,__u32 off,const void *data,__u64 bytes) {
+    /* Keep both bounds in the helper's call frame. Pre-6.9 verifiers do not
+     * reliably recover a bound from a length spilled much earlier in build().
+     * The barrier prevents LLVM merging the checks into bytes-1 arithmetic. */
+    if(bytes>FF_PAYLOAD_MAX) return -1;
+    asm volatile("" : "+r"(bytes));
+    if(!bytes) return -1;
+    return bpf_skb_store_bytes(skb,off,data,bytes,BPF_F_RECOMPUTE_CSUM);
+}
 static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff_interface *iface) {
     struct packet p={};
     if(parse(skb,iface,r->reverse,&p)) return -1;
@@ -95,7 +104,7 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     }
     if(bpf_skb_store_bytes(skb,p.l3,ip,iplen,BPF_F_RECOMPUTE_CSUM) ||
        bpf_skb_store_bytes(skb,p.l4,th,thlen,BPF_F_RECOMPUTE_CSUM) ||
-       bpf_skb_store_bytes(skb,p.l4+thlen,t->data,payload,BPF_F_RECOMPUTE_CSUM)) return -1;
+       store_payload(skb,p.l4+thlen,t->data,payload)) return -1;
     __u64 flags=p.key.protocol==17?BPF_F_MARK_MANGLED_0:0;
     if(bpf_l4_csum_replace(skb,cs,0,delta,flags) ||
        bpf_l4_csum_replace(skb,cs,bpf_htonl(p.end-p.l4),bpf_htonl(transport),4|BPF_F_PSEUDO_HDR|flags)) return -1;
