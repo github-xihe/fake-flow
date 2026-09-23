@@ -54,7 +54,8 @@ def inside():
             syn=IP(src="198.18.0.1",dst="198.18.0.2",ttl=50)/TCP(sport=32000,dport=443,flags="S",seq=10,options=[(34,b"abcd")])/Raw(b"data")
             raw.sendto(bytes(syn),("198.18.0.2",0))
             packets=receive();assert len(packets)==1
-            assert all(k=="NOP" for k,_ in packets[0][TCP].options)
+            assert all(k in ("NOP","EOL") for k,_ in packets[0][TCP].options),packets[0][TCP].options
+            assert bytes(packets[0][TCP])[20:26]==b"\x01"*6
             synack=IP(src="198.18.0.2",dst="198.18.0.1",ttl=50)/TCP(sport=443,dport=32000,flags="SA",seq=20,ack=15)
             os.write(fd,bytes(synack))
             packets=receive()

@@ -1,10 +1,10 @@
 # FakeHTTP / FakeSIP 的 TC eBPF 实现规格
 
-状态：评审草案 v0.1；尚未实现、尚未进行 Linux 内核验证。
+状态：行为规格 v0.1；已开始实现 C/libbpf 与 TC eBPF 程序，使用 GitHub Actions 进行 Linux 内核验证。实际测试结果和未验证边界见 [validation.md](validation.md)，本规格中的目标不自动视为已验收能力。
 
 日期：2026-09-20。暂定项目名：`fakeflow`。
 
-本文件交付行为、架构、边界与验收要求；不修改现有 FakeHTTP 的运行逻辑。
+本文件定义行为、架构、边界与验收要求；本仓库为独立实现，不修改上游 FakeHTTP 的运行逻辑。
 
 ## 1. 目标与范围
 
@@ -22,7 +22,7 @@
 
 ## 2. 对照基线与有意差异
 
-FakeHTTP 基线为本仓库 `84c3b1529cf809cd8913fd767039f5e977928eb5`；TFO 与被动连接提前发包的引入提交为 `eda98bb4942dcf2038205faaaaf256a765b279b3`。FakeSIP 基线为上游 `d4440ae146e5d9ecd1fa33b47661b4d8c7eb4641`。
+FakeHTTP 基线为上游 `84c3b1529cf809cd8913fd767039f5e977928eb5`；TFO 与被动连接提前发包的引入提交为 `eda98bb4942dcf2038205faaaaf256a765b279b3`。FakeSIP 基线为上游 `d4440ae146e5d9ecd1fa33b47661b4d8c7eb4641`。
 
 | 行为 | 上游实现 | 本方案 |
 |---|---|---|
