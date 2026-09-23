@@ -3,6 +3,9 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#ifndef FF_RUNTIME_DIR
+#define FF_RUNTIME_DIR "/run/fakeflow"
+#endif
 const char *ff_stat_names[FF_STATS_MAX]={
     "tcp_syn_seen","tcp_synack_eligible","tfo_stripped","skip_synack_data",
     "udp_new_flow","udp_early_seen","udp_window_exhausted",
@@ -13,7 +16,7 @@ const char *ff_stat_names[FF_STATS_MAX]={
     "skip_mtu","tfo_failed"
 };
 int main(int argc,char **argv) {
-    const char *config="/etc/fakeflow.toml",*object="/usr/lib/fakeflow/fakeflow.bpf.o",*runtime="/run/fakeflow";
+    const char *config="/etc/fakeflow.toml",*object="/usr/lib/fakeflow/fakeflow.bpf.o",*runtime=FF_RUNTIME_DIR;
     int explicit_config=0;
     if(argc<2) goto usage;
     for(int i=2;i<argc;i++) {

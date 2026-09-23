@@ -15,6 +15,8 @@ opkg install /tmp/fakeflow_0.1.0-r1_x86_64.ipk
 从当前设备的软件源安装。不要使用 --force-depends。
 默认 UCI 服务开关为关闭，即使安装过程调用 init 脚本也不会加载程序。
 先按下文配置并前台验证。
+OpenWrt 包的控制目录为 /var/run/fakeflow，适配 OpenWrt 的临时目录布局；
+run、status、stats、reload、stop 均默认使用该目录。
 
 运行内核需要 BPF syscall、TC BPF/clsact、dummy，L3 模式还需要 TUN。
 原生 OpenWrt（含完整虚拟机）从与当前固件内核匹配的软件源安装：

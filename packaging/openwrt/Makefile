@@ -41,7 +41,7 @@ define Build/Compile
 	$(MAKE) -C $(PKG_BUILD_DIR) build/fakeflow.bpf.o CLANG=$(BPF_CLANG) \
 		ARCH_INCLUDE=$(STAGING_DIR)/usr/include \
 		BPF_CFLAGS="-O2 -g -target bpf$(if $(CONFIG_BIG_ENDIAN),eb,el) -I$(STAGING_DIR)/usr/include -I$(TOOLCHAIN_DIR)/include -Iebpf/include -Iebpf/bpf"
-	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -I$(PKG_BUILD_DIR)/ebpf/include \
+	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -DFF_RUNTIME_DIR='"/var/run/fakeflow"' -I$(PKG_BUILD_DIR)/ebpf/include \
 		$(PKG_BUILD_DIR)/ebpf/user/*.c -o $(PKG_BUILD_DIR)/build/fakeflow \
 		$(TARGET_LDFLAGS) -lbpf -lelf -lz
 endef
