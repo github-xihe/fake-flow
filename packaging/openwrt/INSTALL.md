@@ -64,6 +64,8 @@ logread -e fakeflow
 禁用开机启动使用 /etc/init.d/fakeflow disable；持久关闭服务开关可执行
 uci set fakeflow.main.enabled='0' 和 uci commit fakeflow。
 
-CI 在官方 OpenWrt rootfs 中安装包、解析配置，并在 runner 内核上加载
-BPF、挂载 TC 和检查退出清理。这不等于已验证 OpenWrt 6.6/PVE 内核、
-真实 PPPoE 拨号或硬件 offload。协议测试范围见 docs/validation.md。
+CI 除了官方 OpenWrt rootfs 容器，还使用 QEMU 启动 PVE 6.8.4-3-pve
+和 OpenWrt 24.10.5 原生 6.6 内核，检查 IPK 安装、BPF 加载、TC 挂载、
+状态/统计和退出清理。以对应源码提交的 Actions 结果为准。这不等于
+验证了真实 PPPoE 拨号、硬件 offload 或 LXC 权限。协议测试范围见
+docs/validation.md。

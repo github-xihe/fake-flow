@@ -19,6 +19,16 @@ static __noinline int store_payload(struct __sk_buff *skb,__u32 off,const void *
     bytes++;
     return bpf_skb_store_bytes(skb,off,data,bytes,BPF_F_RECOMPUTE_CSUM);
 }
+static __noinline int load_chunk(struct __sk_buff *skb,__u32 off,void *data,__u64 bytes) {
+    /* The checksum loop needs the same explicit 64-bit positive range proof. */
+    asm volatile("" : "+r"(bytes));
+    bytes--;
+    asm volatile("" : "+r"(bytes));
+    if(bytes>=64) return -1;
+    asm volatile("" : "+r"(bytes));
+    bytes++;
+    return bpf_skb_load_bytes(skb,off,data,bytes);
+}
 static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff_interface *iface) {
     struct packet p={};
     if(parse(skb,iface,r->reverse,&p)) return -1;
@@ -39,11 +49,8 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         __u32 off=p.l4+i*64;
         if(off>=p.end) break;
         __u32 n=p.end-off;if(n>64)n=64;
-        /* Keep the lower bound explicit after optimizer algebra on end/off. */
-        asm volatile("" : "+r"(n));
-        if(!n || n>64) return -1;
         __builtin_memset(block,0,sizeof(block));
-        if(bpf_skb_load_bytes(skb,off,block,n)) return -1;
+        if(load_chunk(skb,off,block,n)) return -1;
         oldsum=bpf_csum_diff(0,0,(__be32*)block,64,oldsum);
     }
     __u8 eth[32]={},ip[40]={},th[20]={};
