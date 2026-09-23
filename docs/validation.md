@@ -17,9 +17,11 @@ CI 的实际结果见 [GitHub Actions](https://github.com/lilu0826/fake-flow/act
 
 2026-09-23，提交 `8672779` 的上述全部测试已在 x86_64 与 arm64 原生 runner 通过，见 [双架构成功运行](https://github.com/lilu0826/fake-flow/actions/runs/35827411750)。包含 1200 字节二进制载荷、preserve/both 模式和带数据 SYN-ACK 的排除测试。NAT 场景在首跳捕获 10 个假包，服务端没有收到这些低 TTL 假包，TCP/UDP socket 数据回显成功。后续提交继续在 CI 验证。
 
-CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubuntu 24.04 x86_64、Linux `6.17.0-1022-azure`、Clang 18.1.3。arm64 使用独立 Ubuntu 24.04 runner；两者不能替代 spec 中 Linux 6.6 和目标 OpenWrt 的验证。
+CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubuntu 24.04 x86_64、Linux `6.17.0-1022-azure`、Clang 18.1.3。arm64 使用独立 Ubuntu 24.04 runner；两者不能替代目标内核验证，因此 OpenWrt 工作流另设下述 QEMU 加载测试。
 
-OpenWrt 打包：提交 `76a3613` 已使用官方 24.10.5 x86/64 SDK 编译 musl 用户态程序和 BPF 对象，并在官方 OpenWrt rootfs 容器中通过 opkg 安装、默认服务开关检查、配置解析、真实 BPF 加载、TC 挂载、状态/统计及停止清理，见 [成功运行及 IPK](https://github.com/lilu0826/fake-flow/actions/runs/35830290538)。该容器使用 runner 内核，并未验证 OpenWrt 6.6 或 PVE 内核；procd 完整启动和真实 PPPoE 仍需设备验证。OpenWrt 包的默认控制目录为 `/var/run/fakeflow`。
+OpenWrt 打包：提交 `5b48624` 的 `0.1.0-r2` 使用官方 24.10.5 x86/64 SDK 编译 musl 用户态程序和 BPF 对象，修复 helper 长度在编译优化后无法被 verifier 证明大于零的问题。该包在官方 rootfs 容器，以及 QEMU 中的 **PVE `6.8.4-3-pve`** 和 **OpenWrt 24.10.5 原生 Linux 6.6** 均通过 opkg 安装、默认服务开关检查、配置解析、真实 BPF 加载、TC 挂载、状态/统计及停止清理，见 [成功运行及 IPK](https://github.com/lilu0826/fake-flow/actions/runs/35834170225)。PVE 测试使用官方签名仓库中精确版本的内核，OpenWrt 测试使用官方固件；虚拟机测试不等于已验证 LXC 权限、完整 procd 服务生命周期或真实 PPPoE。默认控制目录为 `/var/run/fakeflow`。
+
+同一提交的 x86_64、arm64 全部协议和生命周期回归也已通过，见 [双架构结果](https://github.com/lilu0826/fake-flow/actions/runs/35834170354)。这些流量测试仍运行在 Ubuntu runner 内核；上述 PVE/6.6 虚拟机测试覆盖安装、加载、控制和清理，尚未复跑完整流量矩阵。
 
 ## 实现选择
 
@@ -34,7 +36,7 @@ OpenWrt 打包：提交 `76a3613` 已使用官方 24.10.5 x86/64 SDK 编译 musl
 
 ## 尚需目标环境验证
 
-- Linux 6.6、PVE/厂商内核、其他架构的 OpenWrt SDK 包构建与 procd 实机运行。
+- Linux 6.6/PVE 的完整流量矩阵、其他厂商内核、其他架构的 OpenWrt SDK 包构建与 procd 实机运行。
 - 真实 PPPoE 协商/重拨、硬件 tag/offload、多会话、多 WAN/mwan3 和接口重建组合。
 - SQM/CAKE、多队列 NIC 顺序，各种非线性 skb、GRO/GSO 和校验和卸载组合。
 - 内核分配故障注入、并发 map 满/驱逐、递归重入压力及部分写入失败测试。builder 缺失和租约过期测试不能代替全部故障路径。
