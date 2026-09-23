@@ -19,6 +19,8 @@ CI 的实际结果见 [GitHub Actions](https://github.com/lilu0826/fake-flow/act
 
 CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubuntu 24.04 x86_64、Linux `6.17.0-1022-azure`、Clang 18.1.3。arm64 使用独立 Ubuntu 24.04 runner；两者不能替代 spec 中 Linux 6.6 和目标 OpenWrt 的验证。
 
+OpenWrt 打包：提交 `76a3613` 已使用官方 24.10.5 x86/64 SDK 编译 musl 用户态程序和 BPF 对象，并在官方 OpenWrt rootfs 容器中通过 opkg 安装、默认服务开关检查、配置解析、真实 BPF 加载、TC 挂载、状态/统计及停止清理，见 [成功运行及 IPK](https://github.com/lilu0826/fake-flow/actions/runs/35830290538)。该容器使用 runner 内核，并未验证 OpenWrt 6.6 或 PVE 内核；procd 完整启动和真实 PPPoE 仍需设备验证。OpenWrt 包的默认控制目录为 `/var/run/fakeflow`。
+
 ## 实现选择
 
 - TCP/UDP LRU map 使用独立的 1024 槽锁数组，因为 LRU map 不支持内嵌 `bpf_spin_lock`。同一流固定映射到同一锁，helper 在锁外调用。驱逐仍可能丢失覆盖和去重历史，全局预算继续限制注入。
@@ -32,7 +34,7 @@ CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubunt
 
 ## 尚需目标环境验证
 
-- Linux 6.6、厂商内核、OpenWrt SDK 包构建与 procd 实机运行。
+- Linux 6.6、PVE/厂商内核、其他架构的 OpenWrt SDK 包构建与 procd 实机运行。
 - 真实 PPPoE 协商/重拨、硬件 tag/offload、多会话、多 WAN/mwan3 和接口重建组合。
 - SQM/CAKE、多队列 NIC 顺序，各种非线性 skb、GRO/GSO 和校验和卸载组合。
 - 内核分配故障注入、并发 map 满/驱逐、递归重入压力及部分写入失败测试。builder 缺失和租约过期测试不能代替全部故障路径。
