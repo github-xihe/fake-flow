@@ -15,9 +15,9 @@ CI 的实际结果见 [GitHub Actions](https://github.com/lilu0826/fake-flow/act
 | 路由/NAT | LAN、router、四个 TTL 跳点、server；真实 socket 业务、SNAT 端口、DNAT、独立抓包、TTL 过期、fq_codel 共存 |
 | 崩溃/接口/预算 | SIGKILL 后租约过期、旧过滤器/私有设备回收、WAN 删除重建、令牌桶耗尽与恢复 |
 
-2026-09-23，提交 `dbd61e2` 的上述全部测试已在 x86_64 runner 通过，见 [成功运行](https://github.com/lilu0826/fake-flow/actions/runs/35827199478)。NAT 场景在首跳捕获 10 个假包，服务端没有收到这些低 TTL 假包，TCP/UDP socket 数据回显成功。后续提交继续在 CI 验证。
+2026-09-23，提交 `8672779` 的上述全部测试已在 x86_64 与 arm64 原生 runner 通过，见 [双架构成功运行](https://github.com/lilu0826/fake-flow/actions/runs/35827411750)。包含 1200 字节二进制载荷、preserve/both 模式和带数据 SYN-ACK 的排除测试。NAT 场景在首跳捕获 10 个假包，服务端没有收到这些低 TTL 假包，TCP/UDP socket 数据回显成功。后续提交继续在 CI 验证。
 
-CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubuntu 24.04 x86_64、Linux `6.17.0-1022-azure`、Clang 18.1.3，不能替代 spec 中 Linux 6.6、arm64 和目标 OpenWrt 的验证。
+CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubuntu 24.04 x86_64、Linux `6.17.0-1022-azure`、Clang 18.1.3。arm64 使用独立 Ubuntu 24.04 runner；两者不能替代 spec 中 Linux 6.6 和目标 OpenWrt 的验证。
 
 ## 实现选择
 
@@ -32,7 +32,7 @@ CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubunt
 
 ## 尚需目标环境验证
 
-- Linux 6.6 和 arm64 加载、厂商内核、OpenWrt SDK 包构建与 procd 实机运行。
+- Linux 6.6、厂商内核、OpenWrt SDK 包构建与 procd 实机运行。
 - 真实 PPPoE 协商/重拨、硬件 tag/offload、多会话、多 WAN/mwan3 和接口重建组合。
 - SQM/CAKE、多队列 NIC 顺序，各种非线性 skb、GRO/GSO 和校验和卸载组合。
 - 内核分配故障注入、并发 map 满/驱逐、递归重入压力及部分写入失败测试。builder 缺失和租约过期测试不能代替全部故障路径。

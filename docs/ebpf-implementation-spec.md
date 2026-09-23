@@ -1,6 +1,6 @@
 # FakeHTTP / FakeSIP 的 TC eBPF 实现规格
 
-状态：行为规格 v0.1；已开始实现 C/libbpf 与 TC eBPF 程序，使用 GitHub Actions 进行 Linux 内核验证。实际测试结果和未验证边界见 [validation.md](validation.md)，本规格中的目标不自动视为已验收能力。
+状态：行为规格 v0.1；已实现 C/libbpf 与 TC eBPF 程序，并在 GitHub Actions 的 x86_64/arm64 runner 上通过默认路径的 Linux 内核测试。实际测试结果和未验证边界见 [validation.md](validation.md)，本规格中的全部目标不自动视为已验收能力。
 
 日期：2026-09-20。暂定项目名：`fakeflow`。
 
@@ -287,7 +287,7 @@ L3 模式不硬编码 Ethernet 头；通过对应 PPP 设备出口让内核封�
 
 ## 12. 配置与运维接口
 
-拟使用 TOML；以下为设计示例，命令尚未实现。
+使用 TOML 配置；以下为配置示例，当前解析器支持的语法子集见仓库 README。
 
 ```toml
 version = 1
@@ -352,7 +352,7 @@ payload 不编译成不可更改的 BPF 常量。必须区分以下三类“地�
 
 ### 12.2 命令与生命周期
 
-CLI 草案：
+CLI：
 
 ```text
 fakeflow check --config /etc/fakeflow.toml

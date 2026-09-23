@@ -2,7 +2,7 @@
 
 用 TC eBPF 在 TCP 握手和 UDP 流初期注入低 TTL/Hop Limit 假载荷。用户态使用 C + libbpf，负责配置、模板、挂载、租约和统计；真实业务报文继续正常路径。
 
-**开发版本。** 实现依据 [spec](docs/ebpf-implementation-spec.md)，验证结果与未验证边界记录在 [验证说明](docs/validation.md)。GitHub Actions 执行真实内核加载及隔离网络测试。测试通过不代表已验证特定运营商 DPI 效果、OpenWrt 实机或所有网卡/队列组合。
+**开发版本。** 实现依据 [spec](docs/ebpf-implementation-spec.md)，验证结果与未验证边界记录在 [验证说明](docs/validation.md)。GitHub Actions 在 x86_64 和 arm64 上执行真实内核加载及隔离网络测试。测试通过不代表已验证特定运营商 DPI 效果、OpenWrt 实机或所有网卡/队列组合。
 
 ## 功能
 
