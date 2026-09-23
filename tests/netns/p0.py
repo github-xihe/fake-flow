@@ -5,6 +5,7 @@ import signal
 import subprocess as sp
 import sys
 from pathlib import Path
+from threading import Event
 
 def run(*args):
     return sp.run(args, check=True, text=True, capture_output=True).stdout
@@ -22,8 +23,10 @@ def inside():
         originals = [Ether(dst="02:00:00:00:00:02", src="02:00:00:00:00:01") /
                      IP(src="198.18.0.1", dst="198.18.0.2", id=i) / p
                      for i, p in enumerate((TCP(flags="S"), UDP()/Raw(b"x"*1400)), 1)]
-        sniffer = AsyncSniffer(iface="peer", store=True, filter="ip")
-        sniffer.start(); time.sleep(.2)
+        ready = Event()
+        sniffer = AsyncSniffer(iface="peer", store=True, filter="ip", started_callback=ready.set)
+        sniffer.start()
+        assert ready.wait(10), "capture socket did not become ready"
         for packet in originals:
             sendp(packet, iface="wan", verbose=False)
         time.sleep(.3)
