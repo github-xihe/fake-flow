@@ -31,7 +31,8 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         oldsum=bpf_csum_diff(0,0,(__be32*)block,64,oldsum);
     }
     __u8 eth[32]={},ip[40]={},th[20]={};
-    if(p.l3 && bpf_skb_load_bytes(skb,0,eth,p.l3&31)) return -1;
+    __u32 l2len=p.l3&31;
+    if(l2len && bpf_skb_load_bytes(skb,0,eth,l2len)) return -1;
     if(bpf_skb_load_bytes(skb,p.l3,ip,iplen)) return -1;
     if(r->reverse && p.l3) {
         __builtin_memcpy(eth,p.eth+6,6);__builtin_memcpy(eth+6,p.eth,6);
@@ -69,7 +70,7 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     __u64 delta=(__u64)(~oldsum)+newsum;
     delta=(delta&0xffffffff)+(delta>>32);
     if(bpf_skb_change_tail(skb,length,0)) return -1;
-    if(p.l3 && bpf_skb_store_bytes(skb,0,eth,p.l3&31,BPF_F_RECOMPUTE_CSUM)) return -1;
+    if(l2len && bpf_skb_store_bytes(skb,0,eth,l2len,BPF_F_RECOMPUTE_CSUM)) return -1;
     if(bpf_skb_store_bytes(skb,p.l3,ip,iplen,BPF_F_RECOMPUTE_CSUM) ||
        bpf_skb_store_bytes(skb,p.l4,th,thlen,BPF_F_RECOMPUTE_CSUM) ||
        bpf_skb_store_bytes(skb,p.l4+thlen,t->data,payload,BPF_F_RECOMPUTE_CSUM)) return -1;
