@@ -1,0 +1,18 @@
+[Unit]
+Description=Fakeflow TC eBPF packet injection
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/fakeflow run --config /etc/fakeflow.toml
+ExecReload=/usr/sbin/fakeflow reload
+Restart=on-failure
+RestartSec=3
+RuntimeDirectory=fakeflow
+RuntimeDirectoryMode=0700
+RuntimeDirectoryPreserve=yes
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target

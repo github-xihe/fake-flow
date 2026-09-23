@@ -11,9 +11,11 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     if(parse(skb,iface,r->reverse,&p)) return -1;
     __u32 tk=r->config_gen*2+(p.key.protocol==17);
     struct ff_template *t=bpf_map_lookup_elem(&templates,&tk);
-    if(!t || !t->len || t->len>FF_PAYLOAD_MAX || p.l3>30) return -1;
+    if(!t || p.l3>30) return -1;
+    __u32 payload=t->len;
+    if(!payload || payload>FF_PAYLOAD_MAX) return -1;
     __u32 iplen=p.key.family==4?20:40, thlen=p.key.protocol==6?20:8;
-    __u32 transport=thlen+t->len, length=p.l3+iplen+transport;
+    __u32 transport=thlen+payload, length=p.l3+iplen+transport;
     if(iplen+transport>iface->mtu) {stat(FF_SKIP_MTU);return -1;}
     /* Keep the original checksum field as a seed. The checksum helper handles
      * CHECKSUM_PARTIAL: data deltas are ignored there, pseudo-header deltas
@@ -29,7 +31,7 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         oldsum=bpf_csum_diff(0,0,(__be32*)block,64,oldsum);
     }
     __u8 eth[32]={},ip[40]={},th[20]={};
-    if(p.l3 && bpf_skb_load_bytes(skb,0,eth,p.l3)) return -1;
+    if(p.l3 && bpf_skb_load_bytes(skb,0,eth,p.l3&31)) return -1;
     if(bpf_skb_load_bytes(skb,p.l3,ip,iplen)) return -1;
     if(r->reverse && p.l3) {
         __builtin_memcpy(eth,p.eth+6,6);__builtin_memcpy(eth+6,p.eth,6);
@@ -61,16 +63,16 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         __builtin_memcpy(th+6,&p.checksum,2);
     }
     __u32 newsum=bpf_csum_diff(0,0,(__be32*)th,20,0);
-    __u32 padded=(t->len+3)&~3;
+    __u32 padded=(payload+3)&~3;
     if(padded>FF_PAYLOAD_MAX) return -1;
     newsum=bpf_csum_diff(0,0,(__be32*)t->data,padded,newsum);
     __u64 delta=(__u64)(~oldsum)+newsum;
     delta=(delta&0xffffffff)+(delta>>32);
     if(bpf_skb_change_tail(skb,length,0)) return -1;
-    if(p.l3 && bpf_skb_store_bytes(skb,0,eth,p.l3,BPF_F_RECOMPUTE_CSUM)) return -1;
+    if(p.l3 && bpf_skb_store_bytes(skb,0,eth,p.l3&31,BPF_F_RECOMPUTE_CSUM)) return -1;
     if(bpf_skb_store_bytes(skb,p.l3,ip,iplen,BPF_F_RECOMPUTE_CSUM) ||
        bpf_skb_store_bytes(skb,p.l4,th,thlen,BPF_F_RECOMPUTE_CSUM) ||
-       bpf_skb_store_bytes(skb,p.l4+thlen,t->data,t->len,BPF_F_RECOMPUTE_CSUM)) return -1;
+       bpf_skb_store_bytes(skb,p.l4+thlen,t->data,payload,BPF_F_RECOMPUTE_CSUM)) return -1;
     __u64 flags=p.key.protocol==17?BPF_F_MARK_MANGLED_0:0;
     if(bpf_l4_csum_replace(skb,cs,0,delta,flags) ||
        bpf_l4_csum_replace(skb,cs,bpf_htonl(p.end-p.l4),bpf_htonl(transport),4|BPF_F_PSEUDO_HDR|flags)) return -1;

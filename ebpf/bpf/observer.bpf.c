@@ -10,8 +10,8 @@ static __always_inline int reserve(struct ff_interface *iface,struct ff_config *
     bpf_spin_lock(&b->lock);
     if(!b->at) {b->tokens=(__u64)c->burst*FF_NS;b->at=now;}
     __u64 elapsed=now-b->at;
-    if(elapsed>FF_NS) elapsed=FF_NS;
-    __u64 tokens=b->tokens+elapsed*c->rate,limit=(__u64)c->burst*FF_NS;
+    __u64 limit=(__u64)c->burst*FF_NS, tokens=limit;
+    if(c->rate && elapsed<=limit/c->rate) tokens=b->tokens+elapsed*c->rate;
     if(tokens>limit) tokens=limit;
     b->at=now;b->tokens=tokens;
     if(tokens>=(__u64)c->repeat*FF_NS) {b->tokens-=(__u64)c->repeat*FF_NS;ok=1;}
