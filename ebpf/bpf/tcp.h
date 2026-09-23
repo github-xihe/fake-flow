@@ -6,6 +6,26 @@ struct option_scan {
     __u8 old[40], replacement[40];
     __u32 n, next, nop_until, strip, changed, rejected;
 };
+/* Prove 1..40 at each helper call, including after bpf_loop and checksum
+ * helpers. Linux 6.6 cannot use an ALU32 zero exclusion as a positive bound. */
+static __noinline int load_options(struct __sk_buff *skb,__u32 off,void *data,__u64 bytes) {
+    asm volatile("" : "+r"(bytes));
+    bytes--;
+    asm volatile("" : "+r"(bytes));
+    if(bytes>=40) return -1;
+    asm volatile("" : "+r"(bytes));
+    bytes++;
+    return bpf_skb_load_bytes(skb,off,data,bytes);
+}
+static __noinline int store_options(struct __sk_buff *skb,__u32 off,const void *data,__u64 bytes) {
+    asm volatile("" : "+r"(bytes));
+    bytes--;
+    asm volatile("" : "+r"(bytes));
+    if(bytes>=40) return -1;
+    asm volatile("" : "+r"(bytes));
+    bytes++;
+    return bpf_skb_store_bytes(skb,off,data,bytes,BPF_F_RECOMPUTE_CSUM);
+}
 static long scan_option(__u32 i,void *context) {
     struct option_scan *s=context;
     if(i>=40 || i>=s->n) return 1;
@@ -26,7 +46,7 @@ static long scan_option(__u32 i,void *context) {
 static __always_inline int options(struct __sk_buff *skb,struct packet *p,int strip) {
     struct option_scan s={};__u32 n=p->hlen-20;
     if(!n) return 0;
-    if(n>40 || bpf_skb_load_bytes(skb,p->l4+20,s.old,n)) return -1;
+    if(n>40 || load_options(skb,p->l4+20,s.old,n)) return -1;
     __builtin_memcpy(s.replacement,s.old,40);s.n=n;s.strip=strip;
     if(bpf_loop(40,scan_option,&s,0)<0 || s.rejected) {
         if(s.rejected==2)stat(FF_SKIP_AUTH);
@@ -38,11 +58,11 @@ static __always_inline int options(struct __sk_buff *skb,struct packet *p,int st
     if(bpf_skb_pull_data(skb,p->l4+p->hlen)) {stat(FF_TFO_FAILED);return -1;}
     __s64 delta=bpf_csum_diff((__be32*)s.old,40,(__be32*)s.replacement,40,0);
     if(delta<0) return -1;
-    if(bpf_skb_store_bytes(skb,p->l4+20,s.replacement,n,BPF_F_RECOMPUTE_CSUM)) {
+    if(store_options(skb,p->l4+20,s.replacement,n)) {
         stat(FF_TFO_FAILED);return -1;
     }
     if(bpf_l4_csum_replace(skb,p->l4+16,0,delta,0)) {
-        bpf_skb_store_bytes(skb,p->l4+20,s.old,n,BPF_F_RECOMPUTE_CSUM);
+        store_options(skb,p->l4+20,s.old,n);
         bpf_skb_store_bytes(skb,p->l4+16,&p->checksum,2,0);
         stat(FF_TFO_FAILED);return -1;
     }
