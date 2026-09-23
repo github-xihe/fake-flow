@@ -86,6 +86,7 @@ sudo /usr/bin/python3 tests/netns/protocols.py
 sudo /usr/bin/python3 tests/netns/l3.py
 sudo /usr/bin/python3 tests/netns/protocols.py --pppoe
 sudo /usr/bin/python3 tests/netns/nat.py
+sudo /usr/bin/python3 tests/netns/lifecycle.py
 ```
 
 测试只在临时网络命名空间中创建链路、路由与防火墙规则。日志和抓包保存在 `build/`，CI 将该目录上传为 artifact。程序不安装全局 ICMP 丢弃规则；可选的关联 ICMP 抑制未实现，PMTU/ICMP 保持正常处理。

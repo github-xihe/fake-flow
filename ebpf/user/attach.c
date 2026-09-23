@@ -58,7 +58,10 @@ int ff_link(const char *name,unsigned mode,unsigned *index,unsigned *mtu) {
     if(!e && ((mode!=FF_L3 && type!=ARPHRD_ETHER) ||
         (mode==FF_L3 && type!=ARPHRD_PPP && type!=ARPHRD_NONE))) e=-1;
     if(!e) e=ioctl(fd,SIOCGIFMTU,&r);
-    if(!e) *mtu=r.ifr_mtu;
+    if(!e) {
+        if(mode==FF_PPPOE && r.ifr_mtu<=8)e=-1;
+        else *mtu=r.ifr_mtu-(mode==FF_PPPOE?8:0);
+    }
     close(fd);return e;
 }
 int ff_dummy(char *name,size_t cap) {

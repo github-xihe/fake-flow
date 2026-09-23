@@ -13,6 +13,9 @@ CI 的实际结果见 [GitHub Actions](https://github.com/lilu0826/fake-flow/act
 | L3 | TUN WAN → 私有 TUN builder → 原 TUN；TCP/UDP、校验和及原包隔离 |
 | PPPoE/VLAN | 合成 PPPoE 会话帧加 VLAN，IPv4/IPv6 TCP/UDP；不等于运营商 PPP 协商实测 |
 | 路由/NAT | LAN、router、四个 TTL 跳点、server；真实 socket 业务、SNAT 端口、DNAT、独立抓包、TTL 过期、fq_codel 共存 |
+| 崩溃/接口/预算 | SIGKILL 后租约过期、旧过滤器/私有设备回收、WAN 删除重建、令牌桶耗尽与恢复 |
+
+2026-09-23，提交 `dbd61e2` 的上述全部测试已在 x86_64 runner 通过，见 [成功运行](https://github.com/lilu0826/fake-flow/actions/runs/35827199478)。NAT 场景在首跳捕获 10 个假包，服务端没有收到这些低 TTL 假包，TCP/UDP socket 数据回显成功。后续提交继续在 CI 验证。
 
 CI 日志记录 `uname -a` 和 Clang 版本。最初通过 P0 的环境为 Ubuntu 24.04 x86_64、Linux `6.17.0-1022-azure`、Clang 18.1.3，不能替代 spec 中 Linux 6.6、arm64 和目标 OpenWrt 的验证。
 
