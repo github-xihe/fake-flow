@@ -43,7 +43,7 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
     FILE *f = fopen(path,"r");
     if (!f) { snprintf(error,cap,"%s: %s",path,strerror(errno)); return -1; }
     char line[2048], section[32]="", seen[128][96];
-    unsigned lineno=0, count=0, version=0;
+    unsigned lineno=0, count=0, version=0, sections_seen=0;
     int bad=0;
     while (fgets(line,sizeof(line),f)) {
         lineno++;
@@ -64,7 +64,10 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
             int found=0;
             for (unsigned i=0;i<4;i++) {
                 char expected[32]; snprintf(expected,sizeof(expected),"[%s]",sections[i]);
-                if (!strcmp(s,expected)) { strcpy(section,sections[i]); found=1; }
+                if (!strcmp(s,expected)) {
+                    if(sections_seen&(1u<<i)) {bad=1;break;}
+                    sections_seen|=1u<<i;strcpy(section,sections[i]);found=1;
+                }
             }
             if (!found) { bad=1; break; }
             continue;
@@ -143,5 +146,11 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         }
     }
     if(o->kernel.burst<o->kernel.repeat) {snprintf(error,cap,"burst must be >= repeat");return -1;}
+    for(unsigned i=0;i<count;i++) {
+        if((!strcmp(o->tcp_payload,"custom") && !strcmp(seen[i],"tcp.0.hostname")) ||
+           (!strcmp(o->udp_payload,"custom") && !strcmp(seen[i],"udp.0.sip_uri"))) {
+            snprintf(error,cap,"custom payload_file cannot be combined with hostname or sip_uri");return -1;
+        }
+    }
     return ff_templates(o,error,cap);
 }

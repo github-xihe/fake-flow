@@ -88,6 +88,9 @@ def main():
             nft=tmp/"rules.nft";nft.write_text(rules);ns(1,"nft","-f",nft)
             # Existing qdisc must survive start/stop and the protocol tests.
             ns(1,"tc","qdisc","replace","dev","wan","root","fq_codel")
+            # TC still receives partial checksums, then the WAN transmit path
+            # completes them in software before the independent receiver tap.
+            ns(1,"ethtool","-K","wan","tx","off")
             qdisc_before=ns(1,"tc","qdisc","show","dev","wan").stdout
             for i,address in ((0,"10.10.0.1"),(6,"198.18.0.2")):
                 p=launch(i,[sys.executable,__file__,"--server",address],sp.PIPE)
