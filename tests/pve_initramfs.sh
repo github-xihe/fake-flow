@@ -53,12 +53,15 @@ for path in paths:
     commands.append('insmod /' + str(output.relative_to(dest / 'root')))
 init = '''#!/bin/sh
 set -e
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
 mount -t proc proc /proc
 mount -t sysfs sysfs /sys
 mount -t devtmpfs devtmpfs /dev
+exec </dev/console >/dev/console 2>&1
+set -x
 mount -t tmpfs tmpfs /tmp
 mkdir -p /var/lock /var/run /run
-hostname pve-test
+echo pve-test > /proc/sys/kernel/hostname
 ''' + '\n'.join(commands) + '''
 ip link set lo up
 ip link set eth0 up

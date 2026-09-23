@@ -78,6 +78,7 @@ jobs:
             ${{ runner.temp }}/rootfs.tar.gz
           key: openwrt-24.10.5-x86_64-sdk-deps-v1
       - name: Collect package
+        id: package
         run: |
           mkdir -p dist
           find "$RUNNER_TEMP/sdk/bin/packages" -name 'fakeflow_*.ipk' -exec cp '{}' dist/ \;
@@ -103,6 +104,7 @@ jobs:
           bash tests/pve_initramfs.sh "$RUNNER_TEMP/rootfs.tar.gz" "$RUNNER_TEMP/pve-vm"
           /usr/bin/python3 tests/openwrt_vm.py "$RUNNER_TEMP/pve-vm" dist --pve
       - name: Load package on OpenWrt Linux 6.6 in QEMU
+        if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         run: |
           curl -fL --retry 3 "https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64/openwrt-$OPENWRT_VERSION-x86-64-generic-ext4-combined.img.gz" -o "$RUNNER_TEMP/openwrt.img.gz"
           echo "5b854a7a2909a0b21887ba9be773b0964eb28fef81d6b8399d32a0f270a5d8ff  $RUNNER_TEMP/openwrt.img.gz" | sha256sum -c -
