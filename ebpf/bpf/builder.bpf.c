@@ -99,6 +99,7 @@ SEC("tc") int ff_builder(struct __sk_buff *skb) {
     if(!iface || iface->generation!=r->ifgen || iface->builder!=skb->ifindex ||
        __sync_val_compare_and_swap(&r->state,0,1)!=0) return TC_ACT_SHOT;
     if(build(skb,r,iface)) {stat(FF_BUILD_FAILED);return TC_ACT_SHOT;}
+    if(!alive(bpf_ktime_get_ns()))return TC_ACT_SHOT;
     stat(FF_BUILD_OK);
     r->state=2;
     return bpf_redirect(r->ifindex,0);

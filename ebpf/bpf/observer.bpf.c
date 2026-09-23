@@ -36,6 +36,7 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
     saved[3]=skb->cb[3];saved[4]=skb->cb[4];
     for(int i=0;i<8;i++) {
         if(i>=c->repeat) break;
+        if(!alive(bpf_ktime_get_ns()))break;
         stat(FF_ATTEMPT);
         __u64 id=__sync_fetch_and_add(seq,1)+1;
         struct ff_request r={.expires=now+FF_REQUEST_NS,.ifindex=skb->ifindex,
@@ -49,7 +50,7 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
         struct ff_request *result=bpf_map_lookup_elem(&requests,&id);
         if(rc) stat(FF_CLONE_FAILED);
         else if(result && result->state==3) stat(FF_SUBMIT_OK);
-        else stat(FF_BUILD_FAILED);
+        else if(!result || result->state!=1) stat(FF_BUILD_FAILED);
         bpf_map_delete_elem(&requests,&id);
     }
     return 0;

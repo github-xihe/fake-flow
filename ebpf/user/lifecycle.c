@@ -42,6 +42,15 @@ static int lease(struct runtime *r,int enabled) {
     unsigned zero=0;struct ff_lease_local {__u64 until;} v={enabled?monotime()+r->options.lease*FF_NS:0};
     return bpf_map_update_elem(map(r,"leases"),&zero,&v,BPF_ANY);
 }
+static void drain_requests(struct runtime *r) {
+    int fd=map(r,"requests");__u64 key,deadline=monotime()+2*FF_NS;
+    unsigned empty=0;
+    while(monotime()<deadline && empty<2) {
+        if(bpf_map_get_next_key(fd,NULL,&key) && errno==ENOENT)empty++;
+        else empty=0;
+        struct timespec pause={.tv_nsec=10000000};nanosleep(&pause,NULL);
+    }
+}
 static int save_state(struct runtime *r) {
     char staging[1050];snprintf(staging,sizeof(staging),"%s.tmp",r->state);
     FILE *f=fopen(staging,"w");if(!f)return -1;
@@ -286,7 +295,7 @@ int ff_run(const char *path,const char *object,const char *runtime) {
     }
     rc=0;
 out:
-    if(r.obj)lease(&r,0);
+    if(r.obj && map(&r,"leases")>=0) {lease(&r,0);drain_requests(&r);}
     for(unsigned i=r.count;i>0;i--)ff_detach(&r.attached[i-1]);
     if(r.tun>=0)close(r.tun);
     if(*r.dummy) {const char *del[]={"ip","link","delete","dev",r.dummy,NULL};ff_command(del);}
