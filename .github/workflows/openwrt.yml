@@ -95,14 +95,17 @@ jobs:
       - name: Install and load BPF in OpenWrt userspace
         run: |
           docker import "$RUNNER_TEMP/rootfs.tar.gz" fakeflow-openwrt:test
+          mkdir -p "$RUNNER_TEMP/openwrt-cache"
           docker run --rm --privileged \
+            -e FF_IPK_CACHE=/cache \
+            -v "$RUNNER_TEMP/openwrt-cache:/cache" \
             -v "$GITHUB_WORKSPACE/dist:/packages:ro" \
             -v "$GITHUB_WORKSPACE/packaging/openwrt/smoke-test.sh:/smoke-test.sh:ro" \
             fakeflow-openwrt:test /bin/sh /smoke-test.sh
       - name: Load package on exact PVE 6.8.4-3 kernel in QEMU
         run: |
           bash tests/pve_initramfs.sh "$RUNNER_TEMP/rootfs.tar.gz" "$RUNNER_TEMP/pve-vm"
-          /usr/bin/python3 tests/openwrt_vm.py "$RUNNER_TEMP/pve-vm" dist --pve
+          FF_IPK_CACHE="$RUNNER_TEMP/openwrt-cache" /usr/bin/python3 tests/openwrt_vm.py "$RUNNER_TEMP/pve-vm" dist --pve
       - name: Load package on OpenWrt Linux 6.6 in QEMU
         if: ${{ !cancelled() && steps.package.outcome == 'success' }}
         run: |
@@ -111,7 +114,7 @@ jobs:
           # OpenWrt appends firmware metadata after the gzip stream. The
           # pinned SHA256 above authenticates it; gzip returns warning 2.
           gzip -dc "$RUNNER_TEMP/openwrt.img.gz" > "$RUNNER_TEMP/openwrt.img" || test "$?" -eq 2
-          /usr/bin/python3 tests/openwrt_vm.py "$RUNNER_TEMP/openwrt.img" dist
+          FF_IPK_CACHE="$RUNNER_TEMP/openwrt-cache" /usr/bin/python3 tests/openwrt_vm.py "$RUNNER_TEMP/openwrt.img" dist
       - uses: actions/upload-artifact@v4
         if: always()
         with:

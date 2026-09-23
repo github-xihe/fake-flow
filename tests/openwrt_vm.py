@@ -7,10 +7,12 @@ directory. No KVM or privileged host network setup is required.
 """
 import functools
 import http.server
+import os
 from pathlib import Path
 import shutil
 import sys
 import tempfile
+import tarfile
 import threading
 
 import pexpect
@@ -24,7 +26,13 @@ def main():
     assert len(packages) == 1, packages
     Path("build").mkdir(exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="fakeflow-vm-") as serving:
-        shutil.copy2(packages[0], Path(serving) / "fakeflow.ipk")
+        # The container opkg test has already authenticated and cached these
+        # packages. Keep the VM verifier test independent of external TLS/DNS.
+        dependencies = list(Path(os.environ['FF_IPK_CACHE']).rglob('*.ipk'))
+        assert dependencies, 'missing authenticated dependency packages'
+        with tarfile.open(Path(serving) / 'packages.tar.gz', 'w:gz') as bundle:
+            for package in [packages[0], *dependencies]:
+                bundle.add(package, arcname=package.name)
         shutil.copy2("packaging/openwrt/smoke-test.sh", Path(serving) / "smoke.sh")
         handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=serving)
         with http.server.ThreadingHTTPServer(("127.0.0.1", 0), handler) as server:
@@ -58,17 +66,18 @@ def main():
                     guest.sendline(
                         setup +
                         "mkdir -p /packages && "
-                        f"wget -O /packages/fakeflow_test.ipk {base}/fakeflow.ipk && "
+                        f"wget -O /tmp/packages.tar.gz {base}/packages.tar.gz && "
+                        "tar -xzf /tmp/packages.tar.gz -C /packages && "
                         f"wget -O /tmp/smoke.sh {base}/smoke.sh; "
                         "rc=$?; printf '\\n__SETUP_%s__\\n' \"$rc\""
                     )
                     guest.expect(r"\r*\n__SETUP_(\d+)__\r*\n")
                     assert guest.match.group(1) == "0", "guest network/package setup failed"
                     kernel_check = ("test \"$(uname -r)\" = '6.8.4-3-pve' && " if pve else
-                                    "(uname -r | grep '^6\\.6\\.') && opkg update && opkg install kmod-sched-bpf kmod-dummy kmod-tun && ")
+                                    "(uname -r | grep '^6\\.6\\.') && ")
                     guest.sendline(
                         "uname -a; " + kernel_check +
-                        "sh /tmp/smoke.sh; "
+                        "FF_OFFLINE=1 sh /tmp/smoke.sh; "
                         "rc=$?; printf '\\n__TEST_%s__\\n' \"$rc\""
                     )
                     guest.expect(r"\r*\n__TEST_(\d+)__\r*\n", timeout=600)
