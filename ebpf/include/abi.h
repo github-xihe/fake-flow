@@ -30,8 +30,8 @@ struct ff_key {
     __u32 ifindex, generation;
     __u8 local[16], remote[16];
     __u16 local_port, remote_port;
-    __u16 vlan[2], session;
+    __u16 vlan[2], vlan_proto[2], session;
     __u8 peer[6], family, protocol;
-    __u16 pad;
+    __u8 vlan_count, pad;
 };
 #endif

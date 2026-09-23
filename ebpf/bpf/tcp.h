@@ -43,6 +43,7 @@ static __always_inline int options(struct __sk_buff *skb,struct packet *p,int st
 }
 static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,struct ff_config *c,int in,__u64 now,__u32 *ttl) {
     int syn=(p->flags&0x17)==2, synack=(p->flags&0x17)==0x12;
+    struct ff_lock *lock=flow_lock(&p->key);if(!lock)return 0;
     struct ff_flow *f=bpf_map_lookup_elem(&tcp_flows,&p->key);
     if(syn) {
         if(!(c->directions&(in?2:1))) return 0;
@@ -58,14 +59,14 @@ static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,st
             } else return 0;
         }
         if(!f) return 0;
-        bpf_spin_lock(&f->lock);
+        bpf_spin_lock(&lock->lock);
         if(now-f->seen>30*FF_NS || (f->syn_seq!=p->seq && f->active==!in)) {
             f->syn_seq=p->seq;f->syn_bytes=p->bytes;f->active=!in;
             f->stopped=0;f->batches=0;f->emitted=0;
         } else if(f->active!=!in) f->stopped=1; /* simultaneous open */
         if(rejected) f->stopped=1;
         f->seen=now;if(in) f->remote_ttl=p->ttl;
-        bpf_spin_unlock(&f->lock);
+        bpf_spin_unlock(&lock->lock);
         return 0;
     }
     if(!f) return 0;
@@ -73,7 +74,7 @@ static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,st
     if(synack) reject=p->bytes || options(skb,p,0);
     if(synack && p->bytes) stat(FF_SKIP_SYNACK_DATA);
     int emit=0;
-    bpf_spin_lock(&f->lock);
+    bpf_spin_lock(&lock->lock);
     if(now-f->seen>30*FF_NS) f->stopped=1;
     f->seen=now;
     if(!synack || reject) f->stopped=1;
@@ -84,7 +85,7 @@ static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,st
         f->batches++;f->emitted=now;emit=1;
         *ttl=in?p->ttl:f->remote_ttl;
     }
-    bpf_spin_unlock(&f->lock);
+    bpf_spin_unlock(&lock->lock);
     if(emit) stat(FF_TCP_ELIGIBLE);
     return emit;
 }

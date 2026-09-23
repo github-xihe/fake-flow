@@ -13,7 +13,7 @@ static __always_inline __u32 read32(const __u8 *p) {return ((__u32)read16(p)<<16
 static __always_inline void write16(__u8 *p,__u16 n) {p[0]=n>>8;p[1]=n;}
 static __always_inline void write32(__u8 *p,__u32 n) {write16(p,n>>16);write16(p+2,n);}
 static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *iface,int in,struct packet *p) {
-    __u8 h[40]={}; __u32 off=0, proto=0;
+    __u8 h[40]={}; __u32 off=0, proto=0, envelope=skb->len;
     p->key.ifindex=skb->ifindex; p->key.generation=iface->generation;
     if(skb->gso_segs>1 || skb->gso_size) {stat(FF_SKIP_GSO);return -1;}
     if(skb->len>4096) {stat(FF_SKIP_LAYOUT);return -1;}
@@ -22,16 +22,20 @@ static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *ifac
         if((p->eth[0]&1)||(p->eth[6]&1)) return -1;
         off=14;proto=read16(p->eth+12);
         int tags=0;
-        if(skb->vlan_present) {p->key.vlan[tags++]=skb->vlan_tci;}
+        if(skb->vlan_present) {p->key.vlan[0]=skb->vlan_tci;p->key.vlan_proto[0]=bpf_ntohs(skb->vlan_proto);tags=1;}
         for(int i=0;i<2;i++) {
             if(proto!=0x8100 && proto!=0x88a8) break;
             if(tags>=2 || bpf_skb_load_bytes(skb,off,h,4)) return -1;
-            p->key.vlan[tags++]=read16(h);proto=read16(h+2);off+=4;
+            if(!tags) {p->key.vlan[0]=read16(h);p->key.vlan_proto[0]=proto;}
+            else {p->key.vlan[1]=read16(h);p->key.vlan_proto[1]=proto;}
+            tags++;proto=read16(h+2);off+=4;
         }
+        p->key.vlan_count=tags;
         if(proto==0x8864) {
             if(iface->mode!=FF_PPPOE || bpf_skb_load_bytes(skb,off,h,8)) return -1;
             if(h[0]!=0x11 || h[1] || !read16(h+2) || read16(h+4)<2 || off+6+read16(h+4)>skb->len) return -1;
             p->key.session=read16(h+2);
+            envelope=off+6+read16(h+4);
             __builtin_memcpy(p->key.peer,p->eth+(in?6:0),6);
             proto=read16(h+6);proto=proto==0x21?0x800:proto==0x57?0x86dd:0;
             off+=8;
@@ -53,7 +57,7 @@ static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *ifac
         __builtin_memcpy(p->key.local,in?h+24:h+8,16);
         __builtin_memcpy(p->key.remote,in?h+8:h+24,16);
     } else return -1;
-    if(p->end>skb->len || p->end<p->l4) return -1;
+    if(p->end>envelope || p->end<p->l4) return -1;
     if(p->key.protocol==6) {
         if(p->end<p->l4+20 || bpf_skb_load_bytes(skb,p->l4,h,20)) return -1;
         p->hlen=(h[12]>>4)*4;p->flags=h[13];p->seq=read32(h+4);p->ack=read32(h+8);

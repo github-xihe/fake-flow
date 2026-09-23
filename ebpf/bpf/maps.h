@@ -7,11 +7,12 @@
 #include <bpf/bpf_endian.h>
 #include "abi.h"
 struct ff_flow {
-    struct bpf_spin_lock lock;
+    __u32 reserved;
     __u32 syn_seq, syn_bytes, active, stopped, batches, packets, outbound, remote_ttl;
     __u64 seen, emitted;
 };
 struct ff_budget { struct bpf_spin_lock lock; __u32 generation; __u64 at, tokens; };
+struct ff_lock { struct bpf_spin_lock lock; __u32 reserved; };
 struct ff_request {
     __u64 expires;
     __u32 state, ifindex, ifgen, config_gen, mode, reverse, ttl;
@@ -26,6 +27,9 @@ MAP(interfaces,BPF_MAP_TYPE_HASH,__u32,struct ff_interface,FF_INTERFACES);
 MAP(templates,BPF_MAP_TYPE_HASH,__u32,struct ff_template,32);
 MAP(tcp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 MAP(udp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
+/* LRU maps cannot embed bpf_spin_lock. A stable key-derived array lock guards
+ * updates; LRU eviction can still lose coverage as permitted by the spec. */
+MAP(flow_locks,BPF_MAP_TYPE_ARRAY,__u32,struct ff_lock,1024);
 MAP(requests,BPF_MAP_TYPE_HASH,__u64,struct ff_request,256);
 MAP(sequence,BPF_MAP_TYPE_ARRAY,__u32,__u64,1);
 MAP(budgets,BPF_MAP_TYPE_ARRAY,__u32,struct ff_budget,FF_INTERFACES);
@@ -41,5 +45,9 @@ static __always_inline struct ff_config *configuration(void) {
 static __always_inline int alive(__u64 now) {
     __u32 z=0; struct ff_lease *l=bpf_map_lookup_elem(&leases,&z);
     return l && now<l->until;
+}
+static __always_inline struct ff_lock *flow_lock(struct ff_key *key) {
+    __u32 bucket=(key->local_port^key->remote_port^key->ifindex)&1023;
+    return bpf_map_lookup_elem(&flow_locks,&bucket);
 }
 #endif
