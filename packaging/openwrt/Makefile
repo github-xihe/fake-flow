@@ -6,6 +6,7 @@ PKG_NAME:=fakeflow
 PKG_VERSION:=0.1.0
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
+PKG_BUILD_FLAGS:=no-lto
 PKG_BUILD_DIR:=$(BUILD_DIR)/$(PKG_NAME)-$(PKG_VERSION)
 
 include $(INCLUDE_DIR)/package.mk
@@ -14,7 +15,13 @@ define Package/fakeflow
   SECTION:=net
   CATEGORY:=Network
   TITLE:=TC eBPF TCP/UDP fake payload injection
-  DEPENDS:=+libbpf +libelf +zlib +ip-full +tc-full +kmod-sched-bpf +kmod-dummy +kmod-tun
+  DEPENDS:=+libbpf +libelf +zlib +ip-full +tc-full
+endef
+
+define Package/fakeflow/description
+ TC eBPF TCP/UDP fake payload injection. The running kernel must provide
+ BPF, clsact, sched-bpf and dummy support (also TUN for L3 mode).
+ Install matching kmod packages on native OpenWrt; containers use host modules.
 endef
 
 define Package/fakeflow/conffiles
@@ -31,7 +38,8 @@ endef
 BPF_CLANG?=clang
 define Build/Compile
 	$(MAKE) -C $(PKG_BUILD_DIR) build/fakeflow.bpf.o CLANG=$(BPF_CLANG) \
-		ARCH_INCLUDE=$(STAGING_DIR)/usr/include
+		ARCH_INCLUDE=$(STAGING_DIR)/usr/include \
+		BPF_CFLAGS="-O2 -g -target bpf$(if $(CONFIG_BIG_ENDIAN),eb,el) -I$(STAGING_DIR)/usr/include -I$(TOOLCHAIN_DIR)/include -Iebpf/include -Iebpf/bpf"
 	$(TARGET_CC) $(TARGET_CFLAGS) $(TARGET_CPPFLAGS) -I$(PKG_BUILD_DIR)/ebpf/include \
 		$(PKG_BUILD_DIR)/ebpf/user/*.c -o $(PKG_BUILD_DIR)/build/fakeflow \
 		$(TARGET_LDFLAGS) -lbpf -lelf -lz

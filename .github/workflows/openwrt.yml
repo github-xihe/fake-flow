@@ -1,0 +1,83 @@
+name: OpenWrt 24.10 package
+on:
+  push:
+    paths:
+      - 'ebpf/**'
+      - 'config/**'
+      - 'packaging/openwrt/**'
+      - '.github/workflows/openwrt.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  x86_64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      OPENWRT_VERSION: 24.10.5
+      SDK_FILE: openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst
+      SDK_SHA256: d3e8ea62fc1c12f93a9c808c2ef4c01b6e149ee240bcd5a74d15bebcbc385bdd
+      ROOTFS_SHA256: fb3245bce37575f1fc9cc467909c37c5b12e49bf7993a34cd19893511bccf40e
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install SDK prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang llvm flex bison gawk gettext libncurses-dev libssl-dev python3-setuptools rsync swig unzip zstd file wget
+      - name: Download and verify SDK and test rootfs
+        run: |
+          base="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64"
+          curl -fL --retry 3 "$base/$SDK_FILE" -o "$RUNNER_TEMP/sdk.tar.zst"
+          echo "$SDK_SHA256  $RUNNER_TEMP/sdk.tar.zst" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/sdk"
+          tar --zstd -xf "$RUNNER_TEMP/sdk.tar.zst" --strip-components=1 -C "$RUNNER_TEMP/sdk"
+          curl -fL --retry 3 "$base/rootfs.tar.gz" -o "$RUNNER_TEMP/rootfs.tar.gz"
+          echo "$ROOTFS_SHA256  $RUNNER_TEMP/rootfs.tar.gz" | sha256sum -c -
+      - name: Configure SDK
+        working-directory: ${{ runner.temp }}/sdk
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install libbpf elfutils zlib iproute2
+          mkdir -p package/fakeflow/src
+          git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
+          cp "$GITHUB_WORKSPACE/packaging/openwrt/Makefile" package/fakeflow/Makefile
+          cat > .config <<'EOF'
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL=n
+          CONFIG_PACKAGE_fakeflow=m
+          CONFIG_SIGNED_PACKAGES=n
+          EOF
+          make defconfig
+      - name: Build IPK
+        working-directory: ${{ runner.temp }}/sdk
+        run: |
+          set -o pipefail
+          make -j2 package/fakeflow/compile V=s BPF_CLANG=clang 2>&1 | tee "$RUNNER_TEMP/openwrt-build.log"
+      - name: Collect package
+        run: |
+          mkdir -p dist
+          find "$RUNNER_TEMP/sdk/bin/packages" -name 'fakeflow_*.ipk' -exec cp '{}' dist/ \;
+          test "$(find dist -name '*.ipk' | wc -l)" -eq 1
+          cp packaging/openwrt/INSTALL.md dist/INSTALL.md
+          printf 'OpenWrt SDK: %s\nTarget: x86/64 (x86_64, musl)\nSource: %s\n' "$OPENWRT_VERSION" "$GITHUB_SHA" > dist/BUILD.txt
+          cd dist
+          sha256sum *.ipk > SHA256SUMS
+      - name: Install and load BPF in OpenWrt userspace
+        run: |
+          docker import "$RUNNER_TEMP/rootfs.tar.gz" fakeflow-openwrt:test
+          docker run --rm --privileged \
+            -v "$GITHUB_WORKSPACE/dist:/packages:ro" \
+            -v "$GITHUB_WORKSPACE/packaging/openwrt/smoke-test.sh:/smoke-test.sh:ro" \
+            fakeflow-openwrt:test /bin/sh /smoke-test.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fakeflow-openwrt-24.10-x86_64
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: openwrt-build-log
+          path: ${{ runner.temp }}/openwrt-build.log
