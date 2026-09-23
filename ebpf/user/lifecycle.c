@@ -237,6 +237,10 @@ int ff_run(const char *path,const char *object,const char *runtime) {
     for(unsigned i=0;i<(l3?2u:1u);i++) {
         unsigned idx=i?r.l3:r.l2;const char *name=i?r.tun_name:r.dummy;
         if(attach_one(&r,idx,BPF_TC_EGRESS,"ff_drop",2) || attach_one(&r,idx,BPF_TC_EGRESS,"ff_builder",1))goto out;
+        char ipv6path[128];snprintf(ipv6path,sizeof(ipv6path),"/proc/sys/net/ipv6/conf/%s/disable_ipv6",name);
+        int ipv6fd=open(ipv6path,O_WRONLY|O_CLOEXEC);
+        if(ipv6fd>=0) {int e=write(ipv6fd,"1\n",2)!=2;close(ipv6fd);if(e)goto out;}
+        else if(errno!=ENOENT)goto out;
         const char *up[]={"ip","link","set","dev",name,"up",NULL};if(ff_command(up))goto out;
     }
     r.route=route_socket();if(r.route<0)goto out;

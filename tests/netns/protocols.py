@@ -44,7 +44,8 @@ def inside():
         def command(name, check=True):
             return run(BIN, name, "--runtime-dir", tmp / "run", check=check)
         def capture(packet, inbound=False):
-            sniff = AsyncSniffer(iface="peer", store=True, filter=f"ether src {local_mac}")
+            sniff = AsyncSniffer(iface="peer", store=True, filter=f"ether src {local_mac}",
+                                 lfilter=lambda p: TCP in p or UDP in p)
             sniff.start(); time.sleep(.06)
             sendp(packet, iface="peer" if inbound else "wan", verbose=False)
             time.sleep(.08)
@@ -92,7 +93,7 @@ def inside():
                     assert check(6, net, bytes(actual[TCP])) == 0, "TFO checksum incorrect"
                     synack = frame(TCP(sport=443, dport=port, flags="SA", seq=1000, ack=len(data)), inbound=True, ipv6=ipv6)
                     packets = capture(synack, True)
-                    assert len(packets) == 2, (len(packets), command("stats").stdout)
+                    assert len(packets) == 2, ([p.summary() for p in packets], command("stats").stdout)
                     for p in packets:
                         verify(p);assert p[TCP].seq == len(data) and p[TCP].ack == 1001
                         assert int(p[TCP].flags) == 0x18 and p[TCP].window == 128
