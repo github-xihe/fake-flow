@@ -1,0 +1,35 @@
+version = 1
+
+[[interfaces]]
+name = "eth1"
+mode = "ethernet"
+
+[tcp]
+enabled = true
+directions = ["active", "passive"]
+payload = "http"
+hostname = "www.example.com"
+tfo = "strip-syn"
+max_batches = 3
+
+[udp]
+enabled = true
+trigger = "egress"
+payload = "sip"
+sip_uri = "sip:service@example.com"
+initial_packets = 5
+idle_timeout_seconds = 30
+
+[injection]
+ttl = 3
+repeat = 2
+estimate_hops = true
+dynamic_percent = 0
+max_packets_per_second = 1000
+burst = 2000
+allow_private = false
+
+[runtime]
+tcp_entries = 8192
+udp_entries = 8192
+lease_seconds = 10
