@@ -56,7 +56,11 @@ def inside():
             ip = IPv6(src=src, dst=dst, hlim=50) if ipv6 else IP(src=src, dst=dst, ttl=50)
             eth = Ether(src=remote_mac if inbound else local_mac, dst=local_mac if inbound else remote_mac)
             if "--pppoe" in sys.argv:
-                return eth / Dot1Q(vlan=100) / PPPoE(sessionid=123) / PPP(proto=0x57 if ipv6 else 0x21) / ip / transport
+                # Scapy compresses small PPP protocol IDs by default. The spec
+                # supports the uncompressed two-byte protocol field.
+                protocol=b"\x00\x57" if ipv6 else b"\x00\x21"
+                return Ether(bytes(eth / Dot1Q(vlan=100) / PPPoE(sessionid=123) /
+                                   Raw(protocol+bytes(ip/transport))))
             return eth / ip / transport
         def verify(packet):
             net = packet[IP] if IP in packet else packet[IPv6]
@@ -130,6 +134,23 @@ def inside():
             assert not capture(frame(TCP(sport=443,dport=24000,flags="SA",seq=2,ack=2),True),True)
             # Orphan SYN-ACK never creates a state.
             assert not capture(frame(TCP(sport=443,dport=24500,flags="SA",seq=2,ack=2),True),True)
+            # Data-bearing SYN-ACK permanently suppresses that handshake.
+            capture(frame(TCP(sport=24600,dport=443,flags="S",seq=1)))
+            assert not capture(frame(TCP(sport=443,dport=24600,flags="SA",seq=2,ack=2)/Raw(b"early"),True),True)
+            assert not capture(frame(TCP(sport=443,dport=24600,flags="SA",seq=2,ack=2),True),True)
+            # preserve still permits SYN data; both mode never reflects an unsolicited first UDP.
+            config.write_text(text.replace('"strip-syn"','"preserve"').replace('trigger = "egress"','trigger = "both"'))
+            command("reload")
+            syn=frame(TCP(sport=24700,dport=443,flags="S",seq=10,options=[(34,b"abcd")])/Raw(b"data"))
+            assert bytes(capture(syn)[0])==bytes(syn)
+            assert len(capture(frame(TCP(sport=443,dport=24700,flags="SA",seq=20,ack=15),True),True))==2
+            first=frame(UDP(sport=5060,dport=48000)/Raw(b"incoming"),True)
+            assert not capture(first,True)
+            out=frame(UDP(sport=48000,dport=5060)/Raw(b"outgoing"))
+            assert len(capture(out))==3
+            reverse=capture(first,True)
+            assert len(reverse)==2
+            for packet in reverse:verify(packet)
             # Atomic reload changes the payload on new flows; invalid reload preserves it.
             config.write_text(text.replace("www.example.com", "new.example.org"))
             assert command("reload").stdout.startswith("OK")

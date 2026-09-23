@@ -106,7 +106,7 @@ def main():
             else:raise AssertionError("daemon startup timeout")
             captures=[]
             for i,path in ((2,ROOT/"build/nat-dpi.pcap"),(6,ROOT/"build/nat-server.pcap")):
-                captures.append(launch(i,["tcpdump","-U","-n","-i","lan","-w",path,"tcp or udp"],sp.DEVNULL))
+                captures.append(launch(i,["tcpdump","--immediate-mode","-U","-n","-i","lan","-w",path,"tcp or udp"],sp.DEVNULL))
             time.sleep(.3)
             print(ns(0,sys.executable,__file__,"--client","198.18.0.2","8080").stdout)
             print(ns(0,sys.executable,__file__,"--client","198.18.0.2","5060","--udp").stdout)
@@ -116,6 +116,8 @@ def main():
             dpi=list(rdpcap(str(ROOT/"build/nat-dpi.pcap")))
             remote=list(rdpcap(str(ROOT/"build/nat-server.pcap")))
             fake=[p for p in dpi if IP in p and p[IP].ttl==3]
+            counters=json.loads(ns(1,BIN,"stats","--runtime-dir",tmp/"run").stdout)
+            print(json.dumps({"stats":counters,"dpi_packets":len(dpi),"server_packets":len(remote)},indent=2))
             assert fake,"no fake packets at DPI hop"
             assert not any(IP in p and p[IP].ttl<=3 for p in remote),"fake reached server"
             for p in fake:
