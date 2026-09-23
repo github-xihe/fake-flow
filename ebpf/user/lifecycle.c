@@ -27,6 +27,7 @@ struct runtime {
     unsigned l2,l3;
     int tun,server,lock,route;
     char dummy[IF_NAMESIZE],tun_name[IF_NAMESIZE],state[1024],socket[108];
+    char owner[96];
 };
 static volatile sig_atomic_t quitting,reloading;
 static void on_signal(int s) {if(s==SIGHUP) reloading=1;else quitting=1;}
@@ -41,17 +42,35 @@ static int lease(struct runtime *r,int enabled) {
     return bpf_map_update_elem(map(r,"leases"),&zero,&v,BPF_ANY);
 }
 static int save_state(struct runtime *r) {
-    FILE *f=fopen(r->state,"w");if(!f)return -1;
+    char staging[1050];snprintf(staging,sizeof(staging),"%s.tmp",r->state);
+    FILE *f=fopen(staging,"w");if(!f)return -1;
     for(unsigned i=0;i<r->count;i++) {
         struct ff_attachment *a=&r->attached[i];
-        fprintf(f,"%u %u %u %u %u\n",a->index,a->point,a->priority,a->handle,a->id);
+        fprintf(f,"F %u %u %u %u %u\n",a->index,a->point,a->priority,a->handle,a->id);
     }
-    int e=fflush(f);if(!e)e=fsync(fileno(f));if(fclose(f))e=-1;return e;
+    if(*r->dummy && r->l2)fprintf(f,"D %u %s %s\n",r->l2,r->dummy,r->owner);
+    int e=fflush(f);if(!e)e=fsync(fileno(f));if(fclose(f))e=-1;
+    if(!e)e=rename(staging,r->state);
+    return e;
 }
 static void stale_filters(const char *path) {
     FILE *f=fopen(path,"r");if(!f)return;
-    struct ff_attachment a;
-    while(fscanf(f,"%u %u %u %u %u",&a.index,&a.point,&a.priority,&a.handle,&a.id)==5) ff_detach(&a);
+    struct ff_attachment a;char line[512];
+    while(fgets(line,sizeof(line),f)) {
+        if(sscanf(line,"F %u %u %u %u %u",&a.index,&a.point,&a.priority,&a.handle,&a.id)==5)ff_detach(&a);
+        unsigned index;char name[IF_NAMESIZE],owner[96];
+        if(sscanf(line,"D %u %15s %95s",&index,name,owner)==3 && if_nametoindex(name)==index) {
+            char aliaspath[128],alias[128];snprintf(aliaspath,sizeof(aliaspath),"/sys/class/net/%s/ifalias",name);
+            FILE *af=fopen(aliaspath,"r");
+            if(af) {
+                if(fgets(alias,sizeof(alias),af)) {
+                    alias[strcspn(alias,"\r\n")]=0;
+                    if(!strcmp(alias,owner)) {const char *del[]={"ip","link","delete","dev",name,NULL};ff_command(del);}
+                }
+                fclose(af);
+            }
+        }
+    }
     fclose(f);
 }
 static int attach_one(struct runtime *r,unsigned index,enum bpf_tc_attach_point point,const char *name,unsigned priority) {
@@ -177,7 +196,8 @@ static void link_events(struct runtime *r) {
 }
 int ff_run(const char *path,const char *object,const char *runtime) {
     struct runtime r={.tun=-1,.server=-1,.lock=-1,.route=-1};
-    char error[1024],lockpath[1024];int rc=1;__u64 last_reload=0;
+    char error[1024],lockpath[1024],config_path[1024];int rc=1;__u64 last_reload=0;
+    if(snprintf(config_path,sizeof(config_path),"%s",path)>=(int)sizeof(config_path))return 1;
     if(geteuid()) {fprintf(stderr,"run requires root\n");return 1;}
     if(ff_config_read(path,&r.options,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
     /* Reject ambiguous logical/physical PPPoE duplication conservatively. */
@@ -206,6 +226,9 @@ int ff_run(const char *path,const char *object,const char *runtime) {
     if(lease(&r,0))goto out;
     if(ff_dummy(r.dummy,sizeof(r.dummy))) {r.dummy[0]=0;goto out;}
     r.l2=if_nametoindex(r.dummy);
+    snprintf(r.owner,sizeof(r.owner),"fakeflow:%u:%llu",getpid(),(unsigned long long)monotime());
+    const char *alias[]={"ip","link","set","dev",r.dummy,"alias",r.owner,NULL};
+    if(ff_command(alias) || save_state(&r))goto out;
     if(l3) {r.tun=ff_tun(r.tun_name,sizeof(r.tun_name));if(r.tun<0)goto out;r.l3=if_nametoindex(r.tun_name);}
     for(unsigned i=0;i<(l3?2u:1u);i++) {
         unsigned idx=i?r.l3:r.l2;const char *name=i?r.tun_name:r.dummy;
@@ -225,7 +248,7 @@ int ff_run(const char *path,const char *object,const char *runtime) {
             if(now-last_reload>2*FF_NS)reap_configs(&r);
             next_lease=now+2*FF_NS;
         }
-        if(reloading) {reloading=0;int e=reload(&r,path,error,sizeof(error));last_reload=now;fprintf(stderr,"reload %s: %s\n",e?"failed":"ok",error);}
+        if(reloading) {reloading=0;int e=reload(&r,config_path,error,sizeof(error));last_reload=now;fprintf(stderr,"reload %s: %s\n",e?"failed":"ok",error);}
         struct pollfd fds[2]={{r.server,POLLIN,0},{r.route,POLLIN,0}};
         int n=poll(fds,2,200);if(n<0 && errno!=EINTR)goto out;
         if(fds[1].revents&POLLIN)link_events(&r);
@@ -234,14 +257,21 @@ int ff_run(const char *path,const char *object,const char *runtime) {
             struct timeval timeout={.tv_sec=1};setsockopt(client,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));
             struct ucred peer;socklen_t len=sizeof(peer);
             if(getsockopt(client,SOL_SOCKET,SO_PEERCRED,&peer,&len) || peer.uid!=geteuid()) {close(client);continue;}
-            char command[64]={};ssize_t got=read(client,command,sizeof(command)-1);
+            char command[1200]={};ssize_t got=0,part;
+            while(got<(ssize_t)sizeof(command)-1 && (part=read(client,command+got,sizeof(command)-1-got))>0)got+=part;
             FILE *out=fdopen(client,"w");if(!out){close(client);continue;}
             if(got<=0) {fclose(out);continue;}
             command[strcspn(command,"\r\n")]=0;
             if(!strcmp(command,"stats"))stats_json(&r,out);
             else if(!strcmp(command,"status"))fprintf(out,"{\"running\":true,\"generation\":%u,\"interfaces\":%u}\n",r.config_gen,r.options.device_count);
             else if(!strcmp(command,"stop")) {quitting=1;fputs("OK stopping\n",out);}
-            else if(!strcmp(command,"reload")) {int e=reload(&r,path,error,sizeof(error));last_reload=monotime();fprintf(out,"%s %s\n",e?"ERROR":"OK",error);}
+            else if(!strcmp(command,"reload") || !strncmp(command,"reload ",7)) {
+                const char *selected=command[6]==' '?command+7:config_path;
+                int e;
+                if(strlen(selected)>=sizeof(config_path)) {snprintf(error,sizeof(error),"configuration path too long");e=-1;}
+                else {e=reload(&r,selected,error,sizeof(error));if(!e && selected!=config_path)strcpy(config_path,selected);}
+                last_reload=monotime();fprintf(out,"%s %s\n",e?"ERROR":"OK",error);
+            }
             else fputs("ERROR unknown command\n",out);
             fclose(out);
         }

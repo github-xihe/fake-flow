@@ -71,7 +71,7 @@ def inside():
         try:
             for _ in range(300):
                 if process.poll() is not None:
-                    raise AssertionError(logpath.read_text())
+                    raise AssertionError("BPF load/start failed; see build/*-daemon.log")
                 if (tmp / "run/control.sock").exists():
                     break
                 time.sleep(.1)

@@ -26,6 +26,9 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         __u32 off=p.l4+i*64;
         if(off>=p.end) break;
         __u32 n=p.end-off;if(n>64)n=64;
+        /* Keep the lower bound explicit after optimizer algebra on end/off. */
+        asm volatile("" : "+r"(n));
+        if(!n || n>64) return -1;
         __builtin_memset(block,0,sizeof(block));
         if(bpf_skb_load_bytes(skb,off,block,n)) return -1;
         oldsum=bpf_csum_diff(0,0,(__be32*)block,64,oldsum);

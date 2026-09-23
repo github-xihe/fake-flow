@@ -2,6 +2,7 @@
 #include "fakeflow.h"
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
 const char *ff_stat_names[FF_STATS_MAX]={
     "tcp_syn_seen","tcp_synack_eligible","tfo_stripped","skip_synack_data",
     "udp_new_flow","udp_early_seen","udp_window_exhausted",
@@ -13,11 +14,12 @@ const char *ff_stat_names[FF_STATS_MAX]={
 };
 int main(int argc,char **argv) {
     const char *config="/etc/fakeflow.toml",*object="/usr/lib/fakeflow/fakeflow.bpf.o",*runtime="/run/fakeflow";
+    int explicit_config=0;
     if(argc<2) goto usage;
     for(int i=2;i<argc;i++) {
         if(!strcmp(argv[i],"--json")) continue;
         if(i+1==argc) goto usage;
-        if(!strcmp(argv[i],"--config")) config=argv[++i];
+        if(!strcmp(argv[i],"--config")) {config=argv[++i];explicit_config=1;}
         else if(!strcmp(argv[i],"--object")) object=argv[++i];
         else if(!strcmp(argv[i],"--runtime-dir")) runtime=argv[++i];
         else goto usage;
@@ -30,7 +32,16 @@ int main(int argc,char **argv) {
         printf("Configuration valid; TCP template %u B, UDP template %u B\n",o.tcp_template.len,o.udp_template.len);return 0;
     }
     if(!strcmp(argv[1],"status") || !strcmp(argv[1],"stats") ||
-       !strcmp(argv[1],"reload") || !strcmp(argv[1],"stop")) return ff_client(runtime,argv[1]);
+       !strcmp(argv[1],"reload") || !strcmp(argv[1],"stop")) {
+        if(!strcmp(argv[1],"reload") && explicit_config) {
+            char *absolute=realpath(config,NULL),command[1100];
+            if(!absolute) {perror(config);return 1;}
+            int n=snprintf(command,sizeof(command),"reload %s",absolute);free(absolute);
+            if(n>=(int)sizeof(command))return 1;
+            return ff_client(runtime,command);
+        }
+        return ff_client(runtime,argv[1]);
+    }
 usage:
     fprintf(stderr,"Usage: fakeflow {check|validate|run|status|stats|reload|stop} [--config FILE] [--object FILE] [--runtime-dir DIR] [--json]\n");
     return 2;
