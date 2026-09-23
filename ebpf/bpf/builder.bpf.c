@@ -67,9 +67,16 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         __builtin_memcpy(th+6,&p.checksum,2);
     }
     __u32 newsum=bpf_csum_diff(0,0,(__be32*)th,20,0);
-    __u32 padded=(payload+3)&~3;
-    if(padded>FF_PAYLOAD_MAX) return -1;
-    newsum=bpf_csum_diff(0,0,(__be32*)t->data,padded,newsum);
+    /* Linux 6.6 limits csum_diff scratch space to 512 bytes. Fixed 80-byte
+     * chunks divide the 1200-byte zero-padded template and stay within it. */
+    for(int i=0;i<15;i++) {
+        __u32 offset=i*80;
+        if(offset>=payload)break;
+        if(offset>1120)return -1;
+        __s64 part=bpf_csum_diff(0,0,(__be32*)(t->data+offset),80,newsum);
+        if(part<0)return -1;
+        newsum=part;
+    }
     __u64 delta=(__u64)(~oldsum)+newsum;
     delta=(delta&0xffffffff)+(delta>>32);
     if(bpf_skb_change_tail(skb,length,0)) return -1;

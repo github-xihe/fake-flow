@@ -35,6 +35,8 @@ static int tls(struct ff_template *t,const char *hostname) {
 }
 int ff_templates(struct ff_options *o,char *error,size_t cap) {
     int n=0;
+    memset(&o->tcp_template,0,sizeof(o->tcp_template));
+    memset(&o->udp_template,0,sizeof(o->udp_template));
     if(!strcmp(o->tcp_payload,"custom")) {
         if(custom(o->tcp_file,&o->tcp_template)) goto bad_file;
     } else {

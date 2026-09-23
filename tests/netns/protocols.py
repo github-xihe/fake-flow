@@ -161,6 +161,22 @@ def inside():
             packets=capture(frame(TCP(sport=443,dport=25000,flags="SA",seq=4,ack=2),True),True)
             assert len(packets)==2
             assert b"new.example.org" in bytes(packets[0][TCP].payload)
+            # Full-sized binary templates also exercise the bounded checksum chunks.
+            binary=bytes(range(256))*4+bytes(range(176))
+            payload_file=tmp/"payload.bin";payload_file.write_bytes(binary)
+            custom=text.replace('payload = "http"',f'payload = "custom"\npayload_file = "{payload_file}"')
+            custom=custom.replace('hostname = "www.example.com"\n','')
+            custom=custom.replace('payload = "sip"',f'payload = "custom"\npayload_file = "{payload_file}"')
+            custom=custom.replace('sip_uri = "sip:service@example.com"\n','')
+            config.write_text(custom);command("reload")
+            for ipv6 in (False,True):
+                packets=capture(frame(UDP(sport=49000,dport=5060)/Raw(b"short"),ipv6=ipv6))
+                assert len(packets)==3
+                for p in packets[:2]:verify(p);assert bytes(p[UDP].payload)==binary
+                capture(frame(TCP(sport=25500,dport=443,flags="S",seq=1),ipv6=ipv6))
+                packets=capture(frame(TCP(sport=443,dport=25500,flags="SA",seq=4,ack=2),True,ipv6),True)
+                assert len(packets)==2
+                for p in packets:verify(p);assert bytes(p[TCP].payload)==binary
             # Lease expiry stops both TFO mutation and injection while daemon is paused.
             process.send_signal(signal.SIGSTOP);time.sleep(4.3)
             syn=frame(TCP(sport=26000,dport=443,flags="S",seq=1,options=[(34,b"abcd")]))
