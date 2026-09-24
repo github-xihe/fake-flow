@@ -12,8 +12,8 @@ CI 的实际结果见 [GitHub Actions](https://github.com/lilu0826/fake-flow/act
 | 协议/生命周期 | IPv4/IPv6、主动/被动 TCP、带数据 SYN 的 TFO、校验和、重传额度、UDP、reload、租约、builder 缺失及清理 |
 | L3 | TUN WAN → 私有 TUN builder → 原 TUN；TCP/UDP、校验和及原包隔离 |
 | PPPoE/VLAN | 合成 PPPoE 会话帧加 VLAN，IPv4/IPv6 TCP/UDP；不等于运营商 PPP 协商实测 |
-| IPv4 UDP 分片 | 首片注入、后续片不计数、乱序、原片不变、零校验和、奇数/最大模板、双向窗口及畸形包排除 |
-| TCX 中继 | 固定版本 `pppoe-relay-bpf` 的真实 PADI/PADO/PADR/PADS、veth/bridge、双启动顺序/重启、主动/被动 IPv4/IPv6 TCP、双向 UDP 分片及停止清理 |
+| IPv4/IPv6 UDP 分片 | 首片注入、后续片不计数、乱序、原片不变、IPv6 atomic fragment、IPv4 零校验和、IPv6 零校验和排除、奇数/最大模板、双向窗口及畸形包排除；计算值为零时编码为 0xffff |
+| TCX 中继 | 固定版本 `pppoe-relay-bpf` 的真实 PADI/PADO/PADR/PADS、veth/bridge、双启动顺序/重启、主动/被动 IPv4/IPv6 TCP、双向 IPv4/IPv6 普通及分片 UDP、停止清理 |
 | 路由/NAT | LAN、router、四个 TTL 跳点、server；真实 socket 业务、SNAT 端口、DNAT、独立抓包、TTL 过期、fq_codel 共存 |
 | 崩溃/接口/预算 | SIGKILL 后租约过期、旧过滤器/私有设备回收、WAN 删除重建、令牌桶耗尽与恢复 |
 
@@ -29,11 +29,15 @@ OpenWrt 打包：提交 `5b48624` 的 `0.1.0-r2` 使用官方 24.10.5 x86/64 SDK
 
 `fakeflow_0.1.0-r3_x86_64.ipk` 源码为 `f7b700e`，与上述回归提交的运行时代码完全一致（后续仅完善测试脚本）。[打包及内核验证](https://github.com/lilu0826/fake-flow/actions/runs/35958962591) 已通过官方 rootfs、精确 PVE `6.8.4-3-pve` 和 OpenWrt Linux `6.6.119` 的安装、加载、挂载、控制及停止清理。包 SHA256：`4d0fc950830a9acc69bf84a28d60fa57edf8381eee540c40f9571a90564e8f05`。完整流量矩阵运行于 Ubuntu runner；不能据此宣称真实运营商中继和所有卸载组合已经验收。
 
+同日，`r4` 新增 `IPv6 → Fragment → UDP` 首片和 atomic fragment 支持。提交 `f88a9b9` 的 [x86_64 / arm64 完整回归](https://github.com/lilu0826/fake-flow/actions/runs/35959877657) 全部通过：Ethernet、VLAN/PPPoE、L3 的 IPv6 分片、乱序与窗口、atomic/普通 UDP 共享计数、1/399/1200 字节假载荷、UDP 计算校验和为零时编码为 `0xffff`、非法长度/保留位/零校验和/其他扩展链排除，以及真实 relay 的双向 IPv4/IPv6 普通和分片 UDP。正常流量测试中 builder/clone 失败计数为零。
+
+`fakeflow_0.1.0-r4_x86_64.ipk` 运行时代码为 `9f85059`，与 `f88a9b9` 一致（后者仅补校验和边界测试）。[r4 打包及内核验证](https://github.com/lilu0826/fake-flow/actions/runs/35959782979) 通过官方 rootfs、PVE `6.8.4-3-pve`、OpenWrt `6.6.119` 的安装/加载/挂载/控制/清理。包 SHA256：`113bc0344d903996ba3706f7a90b1c2c552e53f0e7a17df97b240a42db12aebd`。虚拟机仍只覆盖加载与生命周期，完整流量测试在 Ubuntu runner 执行；不将其他 IPv6 扩展头组合或 TCP 分片视为已支持。
+
 ## 实现选择
 
 - TCP/UDP LRU map 使用独立的 1024 槽锁数组，因为 LRU map 不支持内嵌 `bpf_spin_lock`。同一流固定映射到同一锁，helper 在锁外调用。驱逐仍可能丢失覆盖和去重历史，全局预算继续限制注入。
 - TCP 选项用 `bpf_loop` 最多扫描 40 字节，先验证完整选项列表；MD5/AO 拒绝修改和注入。改写前完成可写性准备，保留旧选项/校验和用于失败恢复。
-- 未分片 builder 保留原 transport checksum 字段作为种子，分别应用 transport 数据差量与伪首部长度差量。IPv4 UDP 首片路径从零重算假包数据与伪首部的和；两种路径均由 `bpf_l4_csum_replace` 区分软件校验和与 `CHECKSUM_PARTIAL`。长度和假载荷只在副本上构造。
+- 未分片 builder 保留原 transport checksum 字段作为种子，分别应用 transport 数据差量与伪首部长度差量。IPv4/IPv6 UDP 首片及 IPv6 atomic fragment 路径从零重算假包数据与伪首部的和。IPv6 去掉 Fragment 头时重定位 UDP 写入及校验和偏移，并在副本上检测、拒绝异常 CHECKSUM_PARTIAL 状态，避免沿用错误的卸载偏移。长度和假载荷只在副本上构造。
 - 请求使用随机起点的 64 位序号、实例私有 map、接口/配置世代、过期时间和原子消费状态。同步 clone 返回后回收请求并恢复原 skb 暂借的 cb 字段。
 - 当前原始 skb 解析上限为 4096 字节，超过时原样放行并计数；假包 L3 长度另受 WAN MTU 限制。这不限制真实业务大小。
 - 热重载不改变接口或 map 容量。旧模板保留超过请求生命周期；过快重载耗尽暂存世代时返回错误，保留有效配置。
