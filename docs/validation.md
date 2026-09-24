@@ -25,6 +25,10 @@ OpenWrt 打包：提交 `5b48624` 的 `0.1.0-r2` 使用官方 24.10.5 x86/64 SDK
 
 同一提交的 x86_64、arm64 全部协议和生命周期回归也已通过，见 [双架构结果](https://github.com/lilu0826/fake-flow/actions/runs/35834170354)。这些流量测试仍运行在 Ubuntu runner 内核；上述 PVE/6.6 虚拟机测试覆盖安装、加载、控制和清理，尚未复跑完整流量矩阵。
 
+2026-09-24，`r3` 增加 TCX 中继共存和 IPv4 UDP 首片注入。提交 `6012089` 的 x86_64、arm64 全部测试通过，见 [双架构回归](https://github.com/lilu0826/fake-flow/actions/runs/35959096724)。新增分片覆盖 Ethernet、VLAN/PPPoE、L3，检查原片不变、首片窗口计数、乱序非首片、入站防反射、零原始 UDP 校验和，以及 1/399/1200 字节自定义假载荷。真实 [pppoe-relay-bpf](https://github.com/lilu0826/pppoe-relay-bpf/tree/3afc58e53fe2939882dcd746be358d97de97cd8e) 联动测试在 veth 和 bridge 拓扑完成 PPPoE discovery/session 建立、双启动顺序、双方重启、TCX 链顺序查询、主动/被动 IPv4/IPv6 TCP、双向 IPv4 UDP 分片和停止后 relay 继续转发。
+
+`fakeflow_0.1.0-r3_x86_64.ipk` 源码为 `f7b700e`，与上述回归提交的运行时代码完全一致（后续仅完善测试脚本）。[打包及内核验证](https://github.com/lilu0826/fake-flow/actions/runs/35958962591) 已通过官方 rootfs、精确 PVE `6.8.4-3-pve` 和 OpenWrt Linux `6.6.119` 的安装、加载、挂载、控制及停止清理。包 SHA256：`4d0fc950830a9acc69bf84a28d60fa57edf8381eee540c40f9571a90564e8f05`。完整流量矩阵运行于 Ubuntu runner；不能据此宣称真实运营商中继和所有卸载组合已经验收。
+
 ## 实现选择
 
 - TCP/UDP LRU map 使用独立的 1024 槽锁数组，因为 LRU map 不支持内嵌 `bpf_spin_lock`。同一流固定映射到同一锁，helper 在锁外调用。驱逐仍可能丢失覆盖和去重历史，全局预算继续限制注入。
