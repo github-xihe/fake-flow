@@ -44,6 +44,33 @@ Chromium 登录 LuCI 后操作载荷类型切换、UDP 双向触发、参数修�
 包大小 10452 字节，SHA256：`f54ac3ca764811ab8289808b139e7df87390a61545997f65e4b79f26c9c1bf73`。
 主程序运行时代码未修改，同一提交的 [x86_64 / arm64 完整回归](https://github.com/lilu0826/fake-flow/actions/runs/35972822970) 通过。
 
+2026-09-24，OpenWrt **25.12.5 x86/64 SDK / GCC 14.3.0 / musl** 原生 APK 适配通过，
+见 [25.12 APK、原生内核和 LuCI 成功运行](https://github.com/lilu0826/fake-flow/actions/runs/35978157053)。
+测试提交 `dd09092`；APK 复用 `606c279` 的 SDK 构建缓存，复用前逐一比较所有编译/安装输入，
+主程序与 LuCI 内容未变，后续提交只调整测试与工作流。
+
+官方 25.12.5 rootfs 完成 APK 安装及依赖解析，官方固件虚拟机确认运行 **Linux 6.12.94**，
+通过配置验证、BPF verifier 加载、TC 挂载、procd 启停/重启、手动实例保护、rpcd 只读权限、
+Chromium 表单导入/修改/预览/校验/保存应用、配置冲突保护和停止清理。
+25.12 原版匿名登录页有一次受限 `uci/get` 请求被拒绝；测试仅记录该登录页请求，
+未放宽匿名权限，登录后的 FakeFlow 页面无未处理脚本错误。
+
+这次还在上述 **OpenWrt 6.12.94 内核**运行 `protocols.py`、`protocols.py --pppoe`、`l3.py`：
+覆盖 Ethernet、VLAN/PPPoE、L3 TUN 的 IPv4/IPv6 TCP/UDP、带数据 SYN 的 TFO、UDP 首片及 atomic fragment、
+原包不变、假包校验和、共享窗口、reload、租约、builder 缺失和 TC 共存/清理。
+Ethernet 与 PPPoE 两组各提交 148 个假包，正常路径 `clone_failed`、`builder_failed` 均为零。
+这里的 PPPoE 是合成会话帧测试；完整真实 relay 联动及 NAT 等矩阵仍在
+[x86_64 / arm64 runner 回归](https://github.com/lilu0826/fake-flow/actions/runs/35978156699)通过，
+不能把它们视为已在原生 6.12 或真实运营商网络复测。
+[24.10 LuCI 回归](https://github.com/lilu0826/fake-flow/actions/runs/35978156718)也通过。
+
+| 25.12 APK | 大小（字节） | SHA256 |
+|---|---:|---|
+| `fakeflow-0.1.0-r4.apk`（x86_64） | 70239 | `48d886d0e744b672ac8900915950292e52c7951f4e4c719478ba6ca09a60ac0a` |
+| `luci-app-fakeflow-0.1.0-r1.apk`（noarch） | 10229 | `525c6348a18f0032978eebee76e777b087fd6706072c5bb94fbea9dbfbbd7f82` |
+
+安装方法见 [OpenWrt 25.12 APK 安装说明](../packaging/openwrt/INSTALL-25.12.md)。
+
 ## 实现选择
 
 - TCP/UDP LRU map 使用独立的 1024 槽锁数组，因为 LRU map 不支持内嵌 `bpf_spin_lock`。同一流固定映射到同一锁，helper 在锁外调用。驱逐仍可能丢失覆盖和去重历史，全局预算继续限制注入。
