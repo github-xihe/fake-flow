@@ -52,6 +52,19 @@ jobs:
       - name: Build native APK packages
         working-directory: ${{ runner.temp }}/sdk
         run: |
+          # Test-only changes do not require SDK dependency repackaging. Reuse
+          # cached APKs only when every input installed/compiled into them matches.
+          if [ "$(find bin/packages \( -name 'fakeflow-*.apk' -o -name 'luci-app-fakeflow-*.apk' \) 2>/dev/null | wc -l)" -eq 2 ] &&
+             diff -qr "$GITHUB_WORKSPACE/ebpf" package/fakeflow/src/ebpf >/dev/null &&
+             diff -qr "$GITHUB_WORKSPACE/config" package/fakeflow/src/config >/dev/null &&
+             diff -qr "$GITHUB_WORKSPACE/packaging/luci" package/luci-app-fakeflow >/dev/null &&
+             cmp -s "$GITHUB_WORKSPACE/Makefile" package/fakeflow/src/Makefile &&
+             cmp -s "$GITHUB_WORKSPACE/packaging/openwrt/Makefile" package/fakeflow/Makefile &&
+             cmp -s "$GITHUB_WORKSPACE/packaging/openwrt/fakeflow.init" package/fakeflow/src/packaging/openwrt/fakeflow.init &&
+             cmp -s "$GITHUB_WORKSPACE/packaging/openwrt/fakeflow.config" package/fakeflow/src/packaging/openwrt/fakeflow.config; then
+            echo 'Reusing SDK APKs: all compiled/installed source inputs are identical.' | tee "$GITHUB_WORKSPACE/build-apk.log"
+            exit 0
+          fi
           if [ ! -d feeds/base ]; then ./scripts/feeds update -a; fi
           ./scripts/feeds install libbpf elfutils zlib iproute2 luci-base rpcd libubox jsonfilter
           if [ -f package/fakeflow/Makefile ]; then make package/fakeflow/clean; fi

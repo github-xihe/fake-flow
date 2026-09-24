@@ -152,7 +152,8 @@ def main():
                         # 25.12's stock login page requests the private luci UCI
                         # config before authentication. Do not grant anonymous
                         # access to hide this upstream login-page rejection.
-                        if session_id == '0' * 32 and message.startswith(
+                        if session_id in (None, '0' * 32) and page.locator(
+                                'input[name="luci_password"]').is_visible() and message.startswith(
                                 'RPC call to uci/get failed with error -32002: Access denied'):
                             print('Stock anonymous LuCI login: private UCI request denied (expected).')
                         else:
