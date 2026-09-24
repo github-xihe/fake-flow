@@ -4,6 +4,9 @@
 支持范围是 OpenWrt 24.10 的 x86_64 用户态；其他架构需要重新编译。
 BUILD.txt 记录源码提交，SHA256SUMS 用于校验包文件。
 
+需要网页配置时，可另装 [luci-app-fakeflow](../luci/INSTALL.md)，入口为 **服务 → FakeFlow**。
+它读取已有 TOML，提供服务开关、自定义载荷路径、TCP/UDP 参数、统计和日志；已有 r4 主程序无需替换。
+
 将 .ipk 上传到路由器 /tmp 后执行：
 
 ```sh

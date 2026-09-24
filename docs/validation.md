@@ -16,6 +16,7 @@ CI 的实际结果见 [GitHub Actions](https://github.com/lilu0826/fake-flow/act
 | TCX 中继 | 固定版本 `pppoe-relay-bpf` 的真实 PADI/PADO/PADR/PADS、veth/bridge、双启动顺序/重启、主动/被动 IPv4/IPv6 TCP、双向 IPv4/IPv6 普通及分片 UDP、停止清理 |
 | 路由/NAT | LAN、router、四个 TTL 跳点、server；真实 socket 业务、SNAT 端口、DNAT、独立抓包、TTL 过期、fq_codel 共存 |
 | 崩溃/接口/预算 | SIGKILL 后租约过期、旧过滤器/私有设备回收、WAN 删除重建、令牌桶耗尽与恢复 |
+| LuCI | TOML 表单往返与边界、自定义载荷、rpcd 只读权限、配置冲突及备份、真实 procd 启停、Chromium 页面操作与手机布局 |
 
 2026-09-23，提交 `8672779` 的上述全部测试已在 x86_64 与 arm64 原生 runner 通过，见 [双架构成功运行](https://github.com/lilu0826/fake-flow/actions/runs/35827411750)。包含 1200 字节二进制载荷、preserve/both 模式和带数据 SYN-ACK 的排除测试。NAT 场景在首跳捕获 10 个假包，服务端没有收到这些低 TTL 假包，TCP/UDP socket 数据回显成功。后续提交继续在 CI 验证。
 
@@ -32,6 +33,16 @@ OpenWrt 打包：提交 `5b48624` 的 `0.1.0-r2` 使用官方 24.10.5 x86/64 SDK
 同日，`r4` 新增 `IPv6 → Fragment → UDP` 首片和 atomic fragment 支持。提交 `f88a9b9` 的 [x86_64 / arm64 完整回归](https://github.com/lilu0826/fake-flow/actions/runs/35959877657) 全部通过：Ethernet、VLAN/PPPoE、L3 的 IPv6 分片、乱序与窗口、atomic/普通 UDP 共享计数、1/399/1200 字节假载荷、UDP 计算校验和为零时编码为 `0xffff`、非法长度/保留位/零校验和/其他扩展链排除，以及真实 relay 的双向 IPv4/IPv6 普通和分片 UDP。正常流量测试中 builder/clone 失败计数为零。
 
 `fakeflow_0.1.0-r4_x86_64.ipk` 运行时代码为 `9f85059`，与 `f88a9b9` 一致（后者仅补校验和边界测试）。[r4 打包及内核验证](https://github.com/lilu0826/fake-flow/actions/runs/35959782979) 通过官方 rootfs、PVE `6.8.4-3-pve`、OpenWrt `6.6.119` 的安装/加载/挂载/控制/清理。包 SHA256：`113bc0344d903996ba3706f7a90b1c2c552e53f0e7a17df97b240a42db12aebd`。虚拟机仍只覆盖加载与生命周期，完整流量测试在 Ubuntu runner 执行；不将其他 IPv6 扩展头组合或 TCP 分片视为已支持。
+
+2026-09-24，独立 LuCI 包 `luci-app-fakeflow_0.1.0-r1_all.ipk`（源码 `3d02656`）通过
+[OpenWrt 24.10.5 SDK 构建与原生虚拟机测试](https://github.com/lilu0826/fake-flow/actions/runs/35972823024)。
+测试实际安装 IPK，执行 rpcd 配置校验、无效配置不落盘、版本冲突拒绝覆盖、备份、自定义载荷文件、
+procd 启停/重启及手动实例保护；通过真实只读会话验证 get/status 可用而 save/validate/action 被拒绝。
+Chromium 登录 LuCI 后操作载荷类型切换、UDP 双向触发、参数修改与改回、TOML 预览、校验、保存应用、
+启停及外部配置冲突，并检查重新加载后的持久化结果；无浏览器脚本错误，产物包含桌面/手机截图和 trace。
+停止服务后验证 TC 过滤器清理。上述 LuCI/procd 测试使用 OpenWrt 原生 Linux 6.6，并非 PVE/LXC 浏览器实机验收。
+包大小 10452 字节，SHA256：`f54ac3ca764811ab8289808b139e7df87390a61545997f65e4b79f26c9c1bf73`。
+主程序运行时代码未修改，同一提交的 [x86_64 / arm64 完整回归](https://github.com/lilu0826/fake-flow/actions/runs/35972822970) 通过。
 
 ## 实现选择
 
