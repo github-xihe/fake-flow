@@ -14,7 +14,7 @@ import time
 from protocols import ROOT, BIN, run
 
 def inside():
-    from scapy.all import IP, TCP, UDP, Raw
+    from scapy.all import IP, TCP, UDP, Raw, fragment
     from scapy.layers.inet import in4_chksum
     from scapy.utils import checksum
     fd=os.open("/dev/net/tun",os.O_RDWR|os.O_NONBLOCK)
@@ -66,6 +66,16 @@ def inside():
                 assert in4_chksum(6,fake,bytes(fake[TCP]))==0
             stats=run(BIN,"stats","--runtime-dir",tmp/"run").stdout
             assert json.loads(stats)["fake_submit_ok"]==4,stats
+            parts=fragment(IP(bytes(IP(src="198.18.0.1",dst="198.18.0.2",ttl=50)/
+                UDP(sport=33000,dport=5060)/Raw(b"fragmented"*200))),fragsize=1472)
+            for part in parts:raw.sendto(bytes(part),("198.18.0.2",0))
+            packets=receive()
+            fakes=[x for x in packets if x.ttl==3]
+            assert len(fakes)==2
+            assert [bytes(x) for x in packets if x.ttl!=3]==[bytes(x) for x in parts]
+            for fake in fakes:
+                assert fake.frag==0 and not (int(fake.flags)&1)
+                assert checksum(bytes(fake)[:20])==0 and in4_chksum(17,fake,bytes(fake[UDP]))==0
             print("PASS: L3 private TUN, TCP/UDP, 1400-byte original isolation, TFO data, checksums and order")
         finally:
             p.terminate()

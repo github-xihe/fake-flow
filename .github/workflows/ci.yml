@@ -44,7 +44,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends linux-tools-common linux-tools-generic
           git clone https://github.com/lilu0826/pppoe-relay-bpf.git build/relay-source
           git -C build/relay-source checkout 3afc58e53fe2939882dcd746be358d97de97cd8e
-          bpftool_bin=$(find /usr/lib/linux-tools -type f -name bpftool | head -n1)
+          bpftool_bin=$(find -L /usr/lib/linux-tools -type f -name bpftool | head -n1)
           test -n "$bpftool_bin"
           make -C build/relay-source -j2 BPFTOOL="$bpftool_bin"
           cc -O2 -Wall -Wextra -Werror tests/tcx_order.c -o build/tcx-order $(pkg-config --cflags --libs libbpf)

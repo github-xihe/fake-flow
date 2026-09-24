@@ -3,6 +3,7 @@
 #include <bpf/bpf.h>
 #include <net/if.h>
 #include <stdio.h>
+#include <unistd.h>
 int main(int argc,char **argv) {
     if(argc!=2)return 2;
     __u32 ids[64];
@@ -13,6 +14,7 @@ int main(int argc,char **argv) {
         struct bpf_prog_info info={0};__u32 len=sizeof(info);
         if(fd<0 || bpf_prog_get_info_by_fd(fd,&info,&len))return 1;
         printf("%s\n",info.name);
+        close(fd);
     }
     return 0;
 }
