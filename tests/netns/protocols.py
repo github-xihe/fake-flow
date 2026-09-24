@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import struct
 import subprocess as sp
 import sys
 import tempfile
@@ -301,6 +302,19 @@ def inside():
                     assert [bytes(p) for p in got if not is_fake(p)]==[bytes(p) for p in parts]
                     for fake in fakes:
                         verify_frag_fake(fake);assert bytes(fake[UDP].payload)==binary[:size]
+            # A mathematically zero UDP checksum must be encoded as 0xffff,
+            # including after removal of the IPv6 Fragment header.
+            for ipv6 in (False,True):
+                sport=55000+int(ipv6)
+                net=IPv6(src="2001:db8::1",dst="2001:db8::2") if ipv6 else IP(src="198.18.0.1",dst="198.18.0.2")
+                zero=UDP(sport=sport,dport=5060,chksum=0)/Raw(b"\0\0")
+                word=(in6_chksum if ipv6 else in4_chksum)(17,net,bytes(zero))
+                payload_file.write_bytes(struct.pack("!H",word));command("reload")
+                parts=fragments(UDP(sport=sport,dport=5060)/Raw(b"x"*64),size=8,ipv6=ipv6)
+                got=capture(parts)
+                assert len(got)==len(parts)+2,command("stats").stdout
+                for fake in got[:2]:
+                    verify_frag_fake(fake);assert fake[UDP].chksum==0xffff
             # Lease expiry stops both TFO mutation and injection while daemon is paused.
             process.send_signal(signal.SIGSTOP);time.sleep(4.3)
             syn=frame(TCP(sport=26000,dport=443,flags="S",seq=1,options=[(34,b"abcd")]))
@@ -310,6 +324,7 @@ def inside():
             process.send_signal(signal.SIGCONT);time.sleep(.3)
             stats=json.loads(command("stats").stdout)
             assert stats["fake_submit_ok"]>0 and stats["tfo_stripped"]>0
+            assert stats["builder_failed"]==0 and stats["clone_failed"]==0,stats
             assert stats["lease_expired"]>0 and stats["skip_auth"]>0
             print(json.dumps(stats, indent=2))
             # Missing builder: the private fallback drops clones, originals survive.
