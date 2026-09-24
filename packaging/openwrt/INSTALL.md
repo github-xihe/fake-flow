@@ -8,7 +8,7 @@ BUILD.txt 记录源码提交，SHA256SUMS 用于校验包文件。
 
 ```sh
 opkg update
-opkg install /tmp/fakeflow_0.1.0-r3_x86_64.ipk
+opkg install /tmp/fakeflow_0.1.0-r4_x86_64.ipk
 ```
 
 程序包声明 libbpf、libelf、zlib、ip-full、tc-full 用户态依赖，由 opkg
@@ -22,7 +22,7 @@ run、status、stats、reload、stop 均默认使用该目录。
 
 `r3` 将 WAN 入站观察程序挂到 TCX 队首，以先于 `pppoe-relay-bpf` 的默认追加程序执行。配置光猫侧上游口（例如 `eth1`）并使用 `mode = "pppoe"`，无需改 relay 的挂载方式，也无需手工添加 TC 规则。出站仍使用 TC priority 1。私有 `ff…l2` 设备继续用于构造假包。
 
-IPv4 UDP 首片即使带 MF 标记，也可按 `egress`/`both` 和初期窗口规则触发完整假包；其他分片原样放行，不重复计数。无需为此新增配置。IPv6 分片、TCP 分片仍跳过注入。
+IPv4 UDP 首片即使带 MF 标记，也可按 `egress`/`both` 和初期窗口规则触发完整假包；其他分片原样放行，不重复计数。`r4` 同时支持 `IPv6 → Fragment → UDP` 首片及 atomic fragment：假包移除 Fragment 头、重算 UDP 校验和，真实各片不变。无需新增配置。TCP 分片和含其他 IPv6 扩展头的组合仍跳过注入。
 原生 OpenWrt（含完整虚拟机）从与当前固件内核匹配的软件源安装：
 
 ```sh

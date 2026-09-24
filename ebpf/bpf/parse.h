@@ -6,7 +6,7 @@ struct packet {
     struct ff_key key;
     __u32 l3,l4,end,hlen,bytes,seq,ack;
     __u16 checksum;
-    __u8 ttl,flags,first_fragment,eth[22];
+    __u8 ttl,flags,first_fragment,fragment_header,eth[22];
 };
 static __always_inline __u16 read16(const __u8 *p) {return ((__u16)p[0]<<8)|p[1];}
 static __always_inline __u32 read32(const __u8 *p) {return ((__u32)read16(p)<<16)|read16(p+2);}
@@ -61,6 +61,18 @@ static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *ifac
         p->end=off+40+read16(h+4);p->l4=off+40;
         __builtin_memcpy(p->key.local,in?h+24:h+8,16);
         __builtin_memcpy(p->key.remote,in?h+8:h+24,16);
+        /* Support the bounded IPv6 -> Fragment -> UDP layout. Later pieces
+         * have no usable tuple. Other extension chains remain fail-open. */
+        if(p->key.protocol==44) {
+            if(p->end>envelope || p->end<p->l4+8 ||
+               bpf_skb_load_bytes(skb,p->l4,h,8)) return -1;
+            __u16 frag=read16(h+2);
+            if((frag&0xfff8) || h[0]!=17) {stat(FF_SKIP_FRAGMENT);return -1;}
+            if(h[1] || (frag&6)) return -1;
+            p->fragment_header=1;p->first_fragment=frag&1;
+            p->key.protocol=17;p->l4+=8;
+            if(p->first_fragment && ((p->end-p->l4)&7)) return -1;
+        }
     } else return -1;
     if(p->end>envelope || p->end<p->l4) return -1;
     if(p->key.protocol==6) {
@@ -72,7 +84,7 @@ static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *ifac
         if(p->end<p->l4+8 || bpf_skb_load_bytes(skb,p->l4,h,8)) return -1;
         __u32 udp_len=read16(h+4),present=p->end-p->l4;
         if(p->first_fragment) {
-            if(udp_len<=present || udp_len>65515) return -1;
+            if(udp_len<=present || (p->key.family==4 && udp_len>65515)) return -1;
         } else if(udp_len!=present) return -1;
         p->hlen=8;__builtin_memcpy(&p->checksum,h+6,2);
         if(p->key.family==6 && !p->checksum) return -1;

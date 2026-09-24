@@ -20,7 +20,7 @@ def run(*args, check=True):
     return p
 
 def inside():
-    from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, AsyncSniffer, sendp, PPPoE, PPP, Dot1Q, fragment, IPv6ExtHdrFragment
+    from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, AsyncSniffer, sendp, PPPoE, PPP, Dot1Q, fragment, fragment6, IPv6ExtHdrFragment, IPv6ExtHdrDestOpt
     from scapy.layers.inet import in4_chksum
     from scapy.layers.inet6 import in6_chksum
     from scapy.utils import checksum
@@ -51,7 +51,7 @@ def inside():
             sniff = AsyncSniffer(iface="peer", store=True,
                                  filter=f"ether src {local_mac} and ether dst {remote_mac}",
                                  lfilter=lambda p: (IP in p and p[IP].proto in (6,17)) or
-                                 (IPv6 in p and p[IPv6].nh in (6,17,44)), started_callback=ready.set)
+                                 (IPv6 in p and p[IPv6].src=="2001:db8::1"), started_callback=ready.set)
             sniff.start(); assert ready.wait(3), "capture startup timed out"
             sendp(packet, iface="peer" if inbound else "wan", verbose=False)
             time.sleep(.08)
@@ -79,20 +79,28 @@ def inside():
             else:
                 assert in6_chksum(proto, net, bytes(transport)) == 0, packet.show(dump=True)
                 assert net.hlim == 3
-        def fragments(transport, inbound=False, size=1472):
-            wire = frame(transport, inbound)
-            net = IP(bytes(wire[IP]))
+        def fragments(transport, inbound=False, size=1472, ipv6=False):
+            wire = frame(transport, inbound, ipv6)
+            layer=IPv6 if ipv6 else IP
+            net = layer(bytes(wire[layer]))
             prefix = wire.copy()
-            prefix[IP].underlayer.remove_payload()
+            prefix[layer].underlayer.remove_payload()
             if PPPoE in prefix: prefix[PPPoE].len = None
-            return [Ether(bytes(prefix / part)) for part in fragment(net, fragsize=size)]
+            parts=fragment6(net,size+48) if ipv6 else fragment(net,fragsize=size)
+            return [Ether(bytes(prefix / part)) for part in parts]
         def verify_frag_fake(packet):
             verify(packet)
-            assert packet[IP].frag == 0 and not (int(packet[IP].flags) & 1)
+            if IP in packet:
+                assert packet[IP].frag == 0 and not (int(packet[IP].flags) & 1)
+            else:
+                assert IPv6ExtHdrFragment not in packet and packet[IPv6].nh==17
+                assert packet[IPv6].plen==len(bytes(packet[UDP]))
+                assert packet[UDP].chksum!=0
             assert packet[UDP].len == len(bytes(packet[UDP]))
             if PPPoE in packet:
                 assert packet[PPPoE].sessionid == 123
-                assert packet[PPPoE].len == len(bytes(packet[IP])) + 2
+                net=packet[IP] if IP in packet else packet[IPv6]
+                assert packet[PPPoE].len == len(bytes(net)) + 2
         try:
             for _ in range(300):
                 if process.poll() is not None:
@@ -196,15 +204,64 @@ def inside():
             assert len(capture(frame(UDP(sport=50100,dport=5060)/Raw(b"reply"))))==3
             got=capture(incoming,True);assert len(got)==2
             for fake in got: verify_frag_fake(fake)
-            # Invalid/truncated UDP first fragments and TCP/IPv6 fragments pass.
+            # IPv6 uses the same flow window as normal datagrams; later pieces
+            # are ignored even when they arrive before their first fragment.
+            parts=fragments(UDP(sport=50300,dport=5060)/Raw(b"v6"*1000),size=1440,ipv6=True)
+            assert len(parts)==2 and parts[0][IPv6ExtHdrFragment].m==1
+            before=json.loads(command("stats").stdout)
+            assert [bytes(p) for p in capture(parts[1])] == [bytes(parts[1])]
+            for batch in range(6):
+                got=capture(parts)
+                fakes=[p for p in got if p[IPv6].hlim==3]
+                assert len(fakes)==(2 if batch<5 else 0),command("stats").stdout
+                assert [bytes(p) for p in got if p[IPv6].hlim!=3]==[bytes(p) for p in parts]
+                for fake in fakes:verify_frag_fake(fake)
+            after=json.loads(command("stats").stdout)
+            assert after["udp_early_seen"]-before["udp_early_seen"]==5
+            assert after["udp_window_exhausted"]-before["udp_window_exhausted"]==1
+            incoming6=fragments(UDP(sport=5060,dport=50301)/Raw(b"i"*2000),True,size=1440,ipv6=True)
+            assert not capture(incoming6,True)
+            assert len(capture(frame(UDP(sport=50301,dport=5060)/Raw(b"reply"),ipv6=True)))==3
+            got=capture(incoming6,True);assert len(got)==2
+            for fake in got:verify_frag_fake(fake)
+            # Atomic fragments have a complete UDP datagram; remove the header
+            # only in the fake, and share the budget with unfragmented UDP.
+            atomic=frame(IPv6ExtHdrFragment(id=42)/UDP(sport=50302,dport=5060)/Raw(b"atomic"),ipv6=True)
+            got=capture(atomic);assert len(got)==3 and bytes(got[-1])==bytes(atomic)
+            for fake in got[:2]:verify_frag_fake(fake)
+            regular=frame(UDP(sport=50302,dport=5060)/Raw(b"regular"),ipv6=True)
+            for batch in range(5):assert len(capture(regular))==(3 if batch<4 else 1)
+            # Invalid/truncated fragments and unsupported extension chains pass.
             invalid=frame(UDP(sport=50200,dport=5060,len=8)/Raw(b"12345678"))
             invalid[IP].flags="MF"
             tiny=frame(Raw(b"1234"));tiny[IP].proto=17;tiny[IP].flags="MF"
             ipv6frag=frame(IPv6ExtHdrFragment(m=1)/UDP(sport=50201,dport=5060)/Raw(b"x"*16),ipv6=True)
             tcpfrags=fragments(TCP(sport=50202,dport=443,flags="S")/Raw(b"x"*1600))
-            for packet in [invalid,tiny,ipv6frag,*tcpfrags]:
+            def bad6(ext):return frame(ext,ipv6=True)
+            udp6=UDP(sport=50400,dport=5060,len=2000,chksum=1)
+            invalid6=[
+                bad6(IPv6ExtHdrFragment(m=1,nh=17)/Raw(b"short")),
+                bad6(IPv6ExtHdrFragment(m=1)/udp6/Raw(b"odd")),
+                bad6(IPv6ExtHdrFragment(m=1)/UDP(sport=50401,dport=5060,len=2000,chksum=0)/Raw(b"x"*8)),
+                bad6(IPv6ExtHdrFragment(m=1,res1=1)/udp6/Raw(b"x"*8)),
+                bad6(IPv6ExtHdrFragment(m=1,res2=1)/udp6/Raw(b"x"*8)),
+                bad6(IPv6ExtHdrFragment()/udp6/Raw(b"x"*8)),
+                bad6(IPv6ExtHdrFragment(m=1,nh=17)/Raw(b"1234")),
+                bad6(IPv6ExtHdrFragment(m=1)/TCP(sport=50402,dport=443,flags="S")/Raw(b"x"*12)),
+                bad6(IPv6ExtHdrDestOpt()/IPv6ExtHdrFragment(m=1)/udp6/Raw(b"x"*8)),
+                bad6(IPv6ExtHdrFragment(m=1)/IPv6ExtHdrDestOpt()/udp6/Raw(b"x"*8)),
+                bad6(IPv6ExtHdrFragment(m=1)/IPv6ExtHdrFragment(m=1)/udp6/Raw(b"x"*8)),
+            ]
+            truncated=bad6(Raw(b"1234"));truncated[IPv6].nh=44;invalid6.append(truncated)
+            # A first fragment whose declared envelope exceeds actual bytes.
+            oversized=bad6(IPv6ExtHdrFragment(m=1)/udp6/Raw(b"x"*8));oversized[IPv6].plen=4000;invalid6.append(oversized)
+            before=json.loads(command("stats").stdout)
+            for packet in [invalid,tiny,ipv6frag,*tcpfrags,*invalid6]:
                 got=capture(packet)
                 assert len(got)==1 and bytes(got[0])==bytes(packet)
+            after=json.loads(command("stats").stdout)
+            assert after["fake_attempt"]==before["fake_attempt"]
+            assert after["udp_early_seen"]==before["udp_early_seen"]
             # Atomic reload changes the payload on new flows; invalid reload preserves it.
             config.write_text(text.replace("www.example.com", "new.example.org"))
             assert command("reload").stdout.startswith("OK")
@@ -235,13 +292,15 @@ def inside():
             # exercise fresh checksums without reading the missing fragments.
             for size in (1,399,1200):
                 payload_file.write_bytes(binary[:size]);config.write_text(custom);command("reload")
-                parts=fragments(UDP(sport=51000+size,dport=5060)/Raw(b"x"*64),size=8)
-                got=capture(parts)
-                fakes=[p for p in got if p[IP].ttl==3]
-                assert len(fakes)==2
-                assert [bytes(p) for p in got if p[IP].ttl!=3]==[bytes(p) for p in parts]
-                for fake in fakes:
-                    verify_frag_fake(fake);assert bytes(fake[UDP].payload)==binary[:size]
+                for ipv6 in (False,True):
+                    parts=fragments(UDP(sport=51000+size,dport=5060)/Raw(b"x"*64),size=8,ipv6=ipv6)
+                    got=capture(parts)
+                    def is_fake(p):return p[IPv6].hlim==3 if ipv6 else p[IP].ttl==3
+                    fakes=[p for p in got if is_fake(p)]
+                    assert len(fakes)==2,command("stats").stdout
+                    assert [bytes(p) for p in got if not is_fake(p)]==[bytes(p) for p in parts]
+                    for fake in fakes:
+                        verify_frag_fake(fake);assert bytes(fake[UDP].payload)==binary[:size]
             # Lease expiry stops both TFO mutation and injection while daemon is paused.
             process.send_signal(signal.SIGSTOP);time.sleep(4.3)
             syn=frame(TCP(sport=26000,dport=443,flags="S",seq=1,options=[(34,b"abcd")]))

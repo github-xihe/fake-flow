@@ -32,6 +32,17 @@ static __noinline int load_chunk(struct __sk_buff *skb,__u32 off,void *data,__u6
 static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff_interface *iface) {
     struct packet p={};
     if(parse(skb,iface,r->reverse,&p)) return -1;
+    if(p.fragment_header) {
+        /* Removing eight bytes moves the transport header. Linux completes
+         * UDP checksums before IPv6 fragmentation, but reject an unexpected
+         * CHECKSUM_PARTIAL clone instead of retaining a stale offload offset.
+         * A data-only checksum delta is ignored precisely in that state.
+         * This probe touches only the clone and its checksum is rebuilt below. */
+        __u16 probe;
+        if(bpf_l4_csum_replace(skb,p.l4+6,0,1,0) ||
+           bpf_skb_load_bytes(skb,p.l4+6,&probe,2)) return -1;
+        if(probe==p.checksum) {stat(FF_SKIP_LAYOUT);return -1;}
+    }
     __u32 tk=r->config_gen*2+(p.key.protocol==17);
     struct ff_template *t=bpf_map_lookup_elem(&templates,&tk);
     if(!t || p.l3>30) return -1;
@@ -39,6 +50,8 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     if(!payload || payload>FF_PAYLOAD_MAX) return -1;
     __u32 iplen=p.key.family==4?20:40, thlen=p.key.protocol==6?20:8;
     __u32 transport=thlen+payload, length=p.l3+iplen+transport;
+    __u32 output_l4=p.l3+iplen;
+    int fresh=p.first_fragment || p.fragment_header;
     if(iplen+transport>iface->mtu) {stat(FF_SKIP_MTU);return -1;}
     /* Keep the original checksum field as a seed. The checksum helper handles
      * CHECKSUM_PARTIAL: data deltas are ignored there, pseudo-header deltas
@@ -46,7 +59,7 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     __u32 oldsum=0;
     __u8 block[64];
     for(int i=0;i<64;i++) {
-        if(p.first_fragment) break;
+        if(fresh) break;
         __u32 off=p.l4+i*64;
         if(off>=p.end) break;
         __u32 n=p.end-off;if(n>64)n=64;
@@ -80,17 +93,19 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     } else {
         __builtin_memcpy(ip+8,p.key.local,16);__builtin_memcpy(ip+24,p.key.remote,16);
         write16(ip+4,transport);ip[7]=r->ttl;
+        /* The fake is a complete datagram without the Fragment header. */
+        if(p.fragment_header)ip[6]=17;
     }
     write16(th,p.key.local_port);write16(th+2,p.key.remote_port);
     __u32 cs;
     if(p.key.protocol==6) {
         write32(th+4,r->reverse?p.ack:p.seq+1);
         write32(th+8,r->reverse?p.seq+1:p.ack);
-        th[12]=0x50;th[13]=0x18;write16(th+14,128);cs=p.l4+16;
+        th[12]=0x50;th[13]=0x18;write16(th+14,128);cs=output_l4+16;
         __builtin_memcpy(th+16,&p.checksum,2);
     } else {
-        write16(th+4,transport);cs=p.l4+6;
-        if(!p.first_fragment)__builtin_memcpy(th+6,&p.checksum,2);
+        write16(th+4,transport);cs=output_l4+6;
+        if(!fresh)__builtin_memcpy(th+6,&p.checksum,2);
     }
     __u32 newsum=bpf_csum_diff(0,0,(__be32*)th,20,0);
     /* Linux 6.6 limits csum_diff scratch space to 512 bytes. Fixed 80-byte
@@ -106,14 +121,19 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     __u64 delta=(__u64)(~oldsum)+newsum;
     delta=(delta&0xffffffff)+(delta>>32);
     __u32 pseudo=0;
-    if(p.first_fragment) {
+    if(fresh) {
         /* The original UDP checksum covers missing fragments; it cannot seed
          * an incremental update. Start at one's-complement zero, then apply
          * data and pseudo-header sums separately. l4_csum_replace ignores the
          * data sum for CHECKSUM_PARTIAL and produces its correct offload seed. */
         __builtin_memset(block,0,sizeof(block));
-        __builtin_memcpy(block,ip+12,8);block[9]=17;write16(block+10,transport);
-        pseudo=bpf_csum_diff(0,0,(__be32*)block,12,0);
+        if(p.key.family==4) {
+            __builtin_memcpy(block,ip+12,8);block[9]=17;write16(block+10,transport);
+            pseudo=bpf_csum_diff(0,0,(__be32*)block,12,0);
+        } else {
+            __builtin_memcpy(block,ip+8,32);write32(block+32,transport);block[39]=17;
+            pseudo=bpf_csum_diff(0,0,(__be32*)block,40,0);
+        }
         delta=newsum;th[6]=th[7]=0xff;
     }
     if(bpf_skb_change_tail(skb,length,0)) return -1;
@@ -128,11 +148,11 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         }
     }
     if(bpf_skb_store_bytes(skb,p.l3,ip,iplen,BPF_F_RECOMPUTE_CSUM) ||
-       bpf_skb_store_bytes(skb,p.l4,th,thlen,BPF_F_RECOMPUTE_CSUM) ||
-       store_payload(skb,p.l4+thlen,t->data,payload)) return -1;
+       bpf_skb_store_bytes(skb,output_l4,th,thlen,BPF_F_RECOMPUTE_CSUM) ||
+       store_payload(skb,output_l4+thlen,t->data,payload)) return -1;
     __u64 flags=p.key.protocol==17?BPF_F_MARK_MANGLED_0:0;
     if(bpf_l4_csum_replace(skb,cs,0,delta,flags)) return -1;
-    if(p.first_fragment) {
+    if(fresh) {
         if(bpf_l4_csum_replace(skb,cs,0,pseudo,BPF_F_PSEUDO_HDR|flags)) return -1;
     } else if(bpf_l4_csum_replace(skb,cs,bpf_htonl(p.end-p.l4),bpf_htonl(transport),4|BPF_F_PSEUDO_HDR|flags)) return -1;
     bpf_csum_level(skb,BPF_CSUM_LEVEL_RESET);

@@ -13,7 +13,7 @@ relay_root=Path(sys.argv[1]).resolve()
 sys.path.insert(0,str(relay_root/"tests"))
 from lab import Lab, CLI, LAN, WAN, AC, SESS, frame, collect, wait_log
 from netns import handshake
-from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, fragment
+from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, fragment, fragment6, IPv6ExtHdrFragment
 from scapy.layers.inet import in4_chksum
 from scapy.layers.inet6 import in6_chksum
 from scapy.utils import checksum
@@ -47,7 +47,9 @@ def scenario(topology):
             if IP in p:
                 assert net.ttl==3 and net.frag==0 and not (int(net.flags)&1)
                 assert checksum(bytes(net)[:20])==0 and in4_chksum(proto,net,bytes(l4))==0
-            else:assert net.hlim==3 and in6_chksum(proto,net,bytes(l4))==0
+            else:
+                assert net.hlim==3 and in6_chksum(proto,net,bytes(l4))==0
+                assert IPv6ExtHdrFragment not in p and net.nh==proto
             return p
         def traffic(sid,port):
             for ipv6 in (False,True):
@@ -76,22 +78,30 @@ def scenario(topology):
                     assert len(fakes)==2,cmd(BIN,"stats","--runtime-dir",runtime).stdout
                     for fake in fakes:
                         p=verify(fake);assert b"Host: www.example.com" in bytes(p[TCP].payload)
-            # Fragmented UDP crosses the actual relay in both directions.
-            for incoming in (False,True):
-                net=IP(src="198.18.0.2" if incoming else "198.18.0.1",dst="198.18.0.1" if incoming else "198.18.0.2",ttl=50)
-                udp=UDP(sport=5060 if incoming else port+30,dport=port+30 if incoming else 5060)
-                parts=fragment(IP(bytes(net/udp/Raw(b"u"*1470))),fragsize=1472)
-                collect(lab.ass,.01);collect(lab.cs,.01)
-                for part in parts:
-                    if incoming:lab.ass.send(frame(WAN,AC,SESS,0,0x4567,b"\x00\x21"+bytes(part)))
-                    else:lab.cs.send(frame(LAN,CLI,SESS,0,sid,b"\x00\x21"+bytes(part)))
-                got=collect(lab.ass)
-                assert len(got)==(2 if incoming else 4), [Ether(p).summary() for p in got]
-                for fake in got[:2]:assert b"INVITE " in bytes(verify(fake,17)[UDP].payload)
-                actual=collect(lab.cs) if incoming else got[2:]
-                expected=[frame(CLI,LAN,SESS,0,sid,b"\x00\x21"+bytes(p)) if incoming else
-                          frame(AC,WAN,SESS,0,0x4567,b"\x00\x21"+bytes(p)) for p in parts]
-                assert actual==expected
+            # Normal and fragmented UDP cross the real relay in both families
+            # and directions, using separate tuples for independent windows.
+            for ipv6 in (False,True):
+                for fragmented in (False,True):
+                    sport=port+30+int(fragmented)
+                    kind=b"\x00\x57" if ipv6 else b"\x00\x21"
+                    for incoming in (False,True):
+                        a,b=("2001:db8::1","2001:db8::2") if ipv6 else ("198.18.0.1","198.18.0.2")
+                        if incoming:a,b=b,a
+                        net=IPv6(src=a,dst=b,hlim=50) if ipv6 else IP(src=a,dst=b,ttl=50)
+                        udp=UDP(sport=5060 if incoming else sport,dport=sport if incoming else 5060)
+                        packet=type(net)(bytes(net/udp/Raw(b"u"*(2000 if fragmented else 32))))
+                        parts=(fragment6(packet,1488) if ipv6 else fragment(packet,fragsize=1472)) if fragmented else [packet]
+                        collect(lab.ass,.01);collect(lab.cs,.01)
+                        for part in parts:
+                            if incoming:lab.ass.send(frame(WAN,AC,SESS,0,0x4567,kind+bytes(part)))
+                            else:lab.cs.send(frame(LAN,CLI,SESS,0,sid,kind+bytes(part)))
+                        got=collect(lab.ass)
+                        assert len(got)==(2 if incoming else 2+len(parts)), [Ether(p).summary() for p in got]
+                        for fake in got[:2]:assert b"INVITE " in bytes(verify(fake,17)[UDP].payload)
+                        actual=collect(lab.cs) if incoming else got[2:]
+                        expected=[frame(CLI,LAN,SESS,0,sid,kind+bytes(p)) if incoming else
+                                  frame(AC,WAN,SESS,0,0x4567,kind+bytes(p)) for p in parts]
+                        assert actual==expected
         try:
             # Relay already attached: fakeflow must prepend, not append.
             proc=start();names=order();assert len(names)==2,names

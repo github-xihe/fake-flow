@@ -207,7 +207,9 @@ P0 若发现 cb、重入、设备类型或同步路径不满足要求，必须�
 
 载荷最大 1200 字节；IP 报文长度必须满足实际 L3 MTU，外层帧另按对应 Ethernet/VLAN/PPPoE 封装限制检查，不能把整帧长度直接与 IP MTU 比较。超限跳过注入并计数，不截断自定义载荷，不自动分片。原包不因 fake 的尺寸限制被丢弃。
 
-原包可能带大载荷、非线性 skb、GSO/GRO。对 GSO/GRO 聚合包、TCP 分片和 IPv6 分片跳过注入。IPv4 UDP 首片（IHL=5、offset=0、MF=1）在含完整 UDP 头、分片长度为 8 的倍数且 UDP 长度大于当前分片 IP 载荷时，可按普通 UDP 触发和窗口规则注入；不重组，不等待后续片。非首片原样放行且不占用窗口。假包清除分片标记、重新计算完整 UDP 及伪首部校验和，不使用原始整份数据报的校验和作为差量种子。所有真实分片保持不变。
+原包可能带大载荷、非线性 skb、GSO/GRO。对 GSO/GRO 聚合包和 TCP 分片跳过注入。IPv4 UDP 首片（IHL=5、offset=0、MF=1）在含完整 UDP 头、分片长度为 8 的倍数且 UDP 长度大于当前分片 IP 载荷时，可按普通 UDP 触发和窗口规则注入；不重组，不等待后续片。非首片原样放行且不占用窗口。假包清除分片标记、重新计算完整 UDP 及伪首部校验和，不使用原始整份数据报的校验和作为差量种子。所有真实分片保持不变。
+
+IPv6 支持固定的 `IPv6 → Fragment → UDP` 布局：offset=0、M=1 的首片必须含完整 UDP 头，Fragment 后的长度须为 8 的倍数，UDP 长度必须大于当前可见 UDP 字节数，且原 UDP 校验和非零。offset=0、M=0 的 atomic fragment 要求 UDP 长度等于实际可见长度。两者与未分片 UDP 共用流键、初期窗口及 `egress`/`both` 规则；非首片不计数。假包移除 Fragment 头，IPv6 Next Header 改为 UDP，重新填写 Payload Length 和完整 UDP 校验和。保留位异常、截断/越界、UDP 零校验和、其他扩展头组合不注入。IPv6 去头路径遇到异常 CHECKSUM_PARTIAL 副本时跳过构造，避免保留错误的卸载偏移；原包仍放行。
 
 ### 8.4 顺序保证的边界
 
@@ -261,7 +263,7 @@ WAN 入站以 TCX `BPF_F_BEFORE`（无 relative 引用）插入队首，先观�
 
 地址过滤按远端判断：ingress 检查源地址，egress 检查目的地址；本地接口使用私网地址不构成跳过理由。IPv4 默认沿用现有排除网段；IPv6 沿用现有特殊地址排除并额外跳过 `ff00::/8` 多播。允许配置例外用于内网实验，不自动放宽。
 
-处理 IPv4 IHL=5 的未分片 TCP/UDP 和上述 UDP 首片，以及无扩展头的 IPv6 TCP/UDP；其他布局原样放行并统计。IPv6 Fragment/AH/ESP 不进入基础注入路径。
+处理 IPv4 IHL=5 的未分片 TCP/UDP 和上述 UDP 首片、无扩展头的 IPv6 TCP/UDP，以及上述 IPv6 UDP Fragment 布局；其他扩展链、AH/ESP 原样放行，不进入注入路径。
 
 不全局丢弃 ICMP。可选模式只抑制能够严格关联至已提交假包的 Time Exceeded：校验引用的元组及足够的报文标识，证据不足则放行。IPv6 Packet Too Big、IPv4 fragmentation-needed 等 PMTU 消息始终正常处理。若 IPv6 引用长度不足以区分真假报文，不能仅按五元组丢弃。
 
@@ -409,8 +411,8 @@ fakeflow stop
 | UDP 首包 SNAT 改写端口 | 假真 WAN 元组一致；回包到达原应用 |
 | UDP 空闲/元组复用/LRU 驱逐 | 有界重新注入，业务不受影响 |
 | IPv6 | Hop Limit、UDP 强制校验和、特殊地址排除 |
-| IPv4 UDP 首片 | 触发独立完整假包；校验和正确，真实各片不变，非首片不占窗口 |
-| TCP/IPv6 分片、扩展头、认证选项、超 MTU | 原包放行，原因可见 |
+| IPv4/IPv6 UDP 首片、IPv6 atomic fragment | 触发独立完整假包；校验和正确，真实各片不变，非首片不占窗口 |
+| TCP 分片、未支持的扩展头、认证选项、超 MTU | 原包放行，原因可见 |
 | TCX PPPoE relay | 双启动顺序和重启；入站先于 relay，主动/被动握手和 UDP 首片正常注入 |
 | ICMP | 不全局破坏 traceroute、PMTU 或正常错误反馈 |
 

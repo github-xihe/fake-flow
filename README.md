@@ -70,7 +70,7 @@ payload_file = "/etc/fakeflow/tcp.bin"
 # custom 模式不要同时填写 hostname。
 ```
 
-TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、TCP 分片、IPv4 选项、IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。IPv4 UDP 的首片（offset=0、MF=1、含完整 UDP 头）可触发注入，无需重组；后续分片不触发、不占用初期窗口。假包是重新计算校验和的完整 UDP 报文，真实分片保持不变。IPv6 分片仍不支持。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
+TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、TCP 分片、IPv4 选项、未支持的 IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。IPv4 UDP 的首片（offset=0、MF=1、含完整 UDP 头）和 `IPv6 → Fragment → UDP` 首片可触发注入，无需重组；后续分片不触发、不占用初期窗口。IPv6 atomic fragment 也按完整 UDP 数据报处理。假包重算校验和、移除分片标记/Fragment 头，真实各片保持不变；叠加其他 IPv6 扩展头仍跳过。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
 
 ## 部署与测试
 
