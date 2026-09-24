@@ -48,8 +48,10 @@ def inside():
             return run(BIN, name, "--runtime-dir", tmp / "run", check=check)
         def capture(packet, inbound=False):
             ready = threading.Event()
-            sniff = AsyncSniffer(iface="peer", store=True, filter=f"ether src {local_mac}",
-                                 lfilter=lambda p: IP in p or IPv6 in p, started_callback=ready.set)
+            sniff = AsyncSniffer(iface="peer", store=True,
+                                 filter=f"ether src {local_mac} and ether dst {remote_mac}",
+                                 lfilter=lambda p: (IP in p and p[IP].proto in (6,17)) or
+                                 (IPv6 in p and p[IPv6].nh in (6,17,44)), started_callback=ready.set)
             sniff.start(); assert ready.wait(3), "capture startup timed out"
             sendp(packet, iface="peer" if inbound else "wan", verbose=False)
             time.sleep(.08)
@@ -227,7 +229,7 @@ def inside():
                 for p in packets[:2]:verify(p);assert bytes(p[UDP].payload)==binary
                 capture(frame(TCP(sport=25500,dport=443,flags="S",seq=1),ipv6=ipv6))
                 packets=capture(frame(TCP(sport=443,dport=25500,flags="SA",seq=4,ack=2),True,ipv6),True)
-                assert len(packets)==2
+                assert len(packets)==2, ([p.summary() for p in packets],command("stats").stdout)
                 for p in packets:verify(p);assert bytes(p[TCP].payload)==binary
             # Tiny originals force growth; odd and maximum custom payloads
             # exercise fresh checksums without reading the missing fragments.
