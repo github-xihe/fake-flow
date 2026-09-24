@@ -1,11 +1,18 @@
 name: OpenWrt LuCI package
 on:
   push:
+    branches: ['**']
     paths:
       - 'packaging/luci/**'
       - 'tests/luci/**'
       - '.github/workflows/luci.yml'
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      core_artifact:
+        description: Test the exact core IPK intended for the release
+        type: string
+        default: ''
 permissions:
   contents: read
 jobs:
@@ -51,6 +58,7 @@ jobs:
           if [ -f package/fakeflow/Makefile ]; then make package/fakeflow/clean; fi
           if [ -f package/luci-app-fakeflow/Makefile ]; then make package/luci-app-fakeflow/clean; fi
           find bin/packages -name 'luci-app-fakeflow_*.ipk' -delete
+          rm -rf package/fakeflow/src package/luci-app-fakeflow
           mkdir -p package/fakeflow/src
           git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
           # SDK scans nested Makefiles too; these are packaging recipes, not sources.
@@ -82,11 +90,23 @@ jobs:
           find "$RUNNER_TEMP/sdk/bin/packages" -name 'luci-app-fakeflow_*.ipk' -exec cp '{}' dist/ \;
           find "$RUNNER_TEMP/sdk/bin/packages" -name 'fakeflow_*.ipk' -exec cp '{}' build/luci-packages/ \;
           test "$(find dist -name '*.ipk' | wc -l)" -eq 1
-          test -f dist/luci-app-fakeflow_0.1.0-r1_all.ipk
+          test "$(find dist -name 'luci-app-fakeflow_*_all.ipk' | wc -l)" -eq 1
           cp dist/*.ipk build/luci-packages/
           cp packaging/luci/INSTALL.md dist/
-          printf 'OpenWrt SDK: %s\nArchitecture: all (LuCI only)\nSource: %s\n' "$OPENWRT_VERSION" "$GITHUB_SHA" > dist/BUILD.txt
+          printf 'OpenWrt SDK: %s\nArchitecture: all (LuCI only)\nSource: %s\n' "$OPENWRT_VERSION" "$(git rev-parse HEAD)" > dist/BUILD.txt
           (cd dist && sha256sum *.ipk > SHA256SUMS)
+      - uses: actions/download-artifact@v4
+        if: inputs.core_artifact != ''
+        with:
+          name: ${{ inputs.core_artifact }}
+          path: release-core
+      - name: Use the release core package for LuCI integration
+        if: inputs.core_artifact != ''
+        run: |
+          (cd release-core && sha256sum -c SHA256SUMS)
+          test "$(find release-core -name 'fakeflow_*.ipk' | wc -l)" -eq 1
+          rm -f build/luci-packages/fakeflow_*.ipk
+          cp release-core/fakeflow_*.ipk build/luci-packages/
       - name: Cache authenticated runtime dependencies
         run: |
           docker import "$RUNNER_TEMP/rootfs.tar.gz" fakeflow-luci:test

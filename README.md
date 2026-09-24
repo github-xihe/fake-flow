@@ -2,7 +2,7 @@
 
 用 TC eBPF 在 TCP 握手和 UDP 流初期注入低 TTL/Hop Limit 假载荷。用户态使用 C + libbpf，负责配置、模板、挂载、租约和统计；真实业务报文继续正常路径。
 
-**开发版本。** 实现依据 [spec](docs/ebpf-implementation-spec.md)，验证结果与未验证边界记录在 [验证说明](docs/validation.md)。GitHub Actions 在 x86_64 和 arm64 上执行真实内核加载及隔离网络测试。测试通过不代表已验证特定运营商 DPI 效果、OpenWrt 实机或所有网卡/队列组合。
+安装包见 [GitHub Releases](https://github.com/lilu0826/fake-flow/releases)。实现依据 [spec](docs/ebpf-implementation-spec.md)，验证结果与未验证边界记录在 [验证说明](docs/validation.md)。GitHub Actions 在 x86_64 和 arm64 上执行真实内核加载及隔离网络测试。测试通过不代表已验证特定运营商 DPI 效果、OpenWrt 实机或所有网卡/队列组合。
 
 ## 功能
 
@@ -73,6 +73,11 @@ payload_file = "/etc/fakeflow/tcp.bin"
 TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、TCP 分片、IPv4 选项、未支持的 IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。IPv4 UDP 的首片（offset=0、MF=1、含完整 UDP 头）和 `IPv6 → Fragment → UDP` 首片可触发注入，无需重组；后续分片不触发、不占用初期窗口。IPv6 atomic fragment 也按完整 UDP 数据报处理。假包重算校验和、移除分片标记/Fragment 头，真实各片保持不变；叠加其他 IPv6 扩展头仍跳过。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
 
 ## 部署与测试
+
+正式版本在 [Releases](https://github.com/lilu0826/fake-flow/releases) 下载：OpenWrt 24.10 选择 IPK，
+25.12 选择 APK；均提供 x86_64 主程序、架构无关 LuCI 包、安装说明与 SHA256 校验值。
+推送 `0.1.0` 这样的版本标签会触发 `Release OpenWrt packages` 工作流：从标签源码重新构建，
+完成协议、目标内核与 LuCI 测试，核对源码提交和包校验值后，上传全部附件并发布 Release。
 
 OpenWrt 24.10 可安装独立的 **luci-app-fakeflow**，在 **服务 → FakeFlow** 中修改
 现有 TOML 配置、设置自定义载荷路径、启停服务及查看统计和日志。

@@ -1,0 +1,102 @@
+name: Release OpenWrt packages
+on:
+  push:
+    tags: ['[0-9]*']
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate release version and packaging checks
+        run: |
+          python3 scripts/prepare_release.py --check-version "$GITHUB_REF_NAME"
+          python3 -m unittest discover -s tests/release -p 'test_*.py'
+  linux:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+  openwrt24:
+    needs: version
+    uses: ./.github/workflows/openwrt.yml
+  luci24:
+    needs: openwrt24
+    uses: ./.github/workflows/luci.yml
+    with:
+      core_artifact: fakeflow-openwrt-24.10-x86_64
+  openwrt25:
+    needs: version
+    uses: ./.github/workflows/openwrt-apk.yml
+  publish:
+    needs: [linux, openwrt24, luci24, openwrt25]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fakeflow-openwrt-24.10-x86_64
+          path: inputs/openwrt24
+      - uses: actions/download-artifact@v4
+        with:
+          name: luci-app-fakeflow-openwrt-24.10
+          path: inputs/luci24
+      - uses: actions/download-artifact@v4
+        with:
+          name: fakeflow-openwrt-25.12-x86_64-apk
+          path: inputs/openwrt25
+      - name: Verify provenance and prepare release assets
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          python3 scripts/prepare_release.py --tag "$GITHUB_REF_NAME" --source "$(git rev-parse HEAD)" --run-url "$RUN_URL"
+          (cd release && sha256sum -c SHA256SUMS)
+      - name: Upload verified assets and publish
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const tag = context.ref.replace(/^refs\/tags\//, '');
+            const repo = context.repo;
+            const files = fs.readdirSync('release').sort();
+            const body = fs.readFileSync('release-notes.md', 'utf8');
+            let release;
+            try {
+              release = (await github.rest.repos.getReleaseByTag({ ...repo, tag })).data;
+              if (!release.draft) throw new Error('Release already published; refusing to replace its assets.');
+            } catch (error) {
+              if (error.status !== 404) throw error;
+              release = (await github.rest.repos.createRelease({ ...repo, tag_name: tag,
+                name: `FakeFlow ${tag}`, body, draft: true, prerelease: false })).data;
+            }
+            const previous = await github.paginate(github.rest.repos.listReleaseAssets,
+              { ...repo, release_id: release.id });
+            // A failed attempt may leave a draft. Only replace that draft's assets.
+            for (const asset of previous) {
+              await github.rest.repos.deleteReleaseAsset({ ...repo, asset_id: asset.id });
+            }
+            for (const name of files) {
+              const data = fs.readFileSync(`release/${name}`);
+              const { data: asset } = await github.rest.repos.uploadReleaseAsset({
+                ...repo, release_id: release.id, name, data,
+                headers: { 'content-type': 'application/octet-stream', 'content-length': data.length }
+              });
+              if (asset.size !== data.length || asset.state !== 'uploaded')
+                throw new Error(`Incomplete upload: ${name}`);
+              const digest = 'sha256:' + crypto.createHash('sha256').update(data).digest('hex');
+              if (asset.digest && asset.digest !== digest) throw new Error(`Digest mismatch: ${name}`);
+            }
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets,
+              { ...repo, release_id: release.id });
+            if (JSON.stringify(assets.map(a => a.name).sort()) !== JSON.stringify(files))
+              throw new Error('Release asset set does not match verified files.');
+            const { data: published } = await github.rest.repos.updateRelease({ ...repo,
+              release_id: release.id, name: `FakeFlow ${tag}`, body, draft: false,
+              prerelease: false, make_latest: 'true' });
+            await core.summary.addHeading(`FakeFlow ${tag}`).addLink('Release', published.html_url)
+              .addList(files).write();

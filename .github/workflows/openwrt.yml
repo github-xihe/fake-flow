@@ -1,6 +1,7 @@
 name: OpenWrt 24.10 package
 on:
   push:
+    branches: ['**']
     paths:
       - 'ebpf/**'
       - 'config/**'
@@ -10,6 +11,7 @@ on:
       - '.github/workflows/openwrt.yml'
       - 'Makefile'
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -54,6 +56,7 @@ jobs:
           if [ -f package/fakeflow/Makefile ]; then
             make package/fakeflow/clean
           fi
+          rm -rf package/fakeflow/src
           mkdir -p package/fakeflow/src
           git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
           rm -f package/fakeflow/src/packaging/openwrt/Makefile package/fakeflow/src/packaging/luci/Makefile
@@ -85,7 +88,7 @@ jobs:
           find "$RUNNER_TEMP/sdk/bin/packages" -name 'fakeflow_*.ipk' -exec cp '{}' dist/ \;
           test "$(find dist -name '*.ipk' | wc -l)" -eq 1
           cp packaging/openwrt/INSTALL.md dist/INSTALL.md
-          printf 'OpenWrt SDK: %s\nTarget: x86/64 (x86_64, musl)\nSource: %s\n' "$OPENWRT_VERSION" "$GITHUB_SHA" > dist/BUILD.txt
+          printf 'OpenWrt SDK: %s\nTarget: x86/64 (x86_64, musl)\nSource: %s\n' "$OPENWRT_VERSION" "$(git rev-parse HEAD)" > dist/BUILD.txt
           cd dist
           sha256sum *.ipk > SHA256SUMS
       - uses: actions/upload-artifact@v4

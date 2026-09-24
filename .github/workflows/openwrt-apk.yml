@@ -1,6 +1,7 @@
 name: OpenWrt 25.12 APK and kernel tests
 on:
   push:
+    branches: ['**']
     paths:
       - 'ebpf/**'
       - 'config/**'
@@ -12,6 +13,7 @@ on:
       - '.github/workflows/openwrt-apk.yml'
       - 'Makefile'
   workflow_dispatch:
+  workflow_call:
 permissions:
   contents: read
 jobs:
@@ -54,7 +56,8 @@ jobs:
         run: |
           # Test-only changes do not require SDK dependency repackaging. Reuse
           # cached APKs only when every input installed/compiled into them matches.
-          if [ "$(find bin/packages \( -name 'fakeflow-*.apk' -o -name 'luci-app-fakeflow-*.apk' \) 2>/dev/null | wc -l)" -eq 2 ] &&
+          if [ "$GITHUB_REF_TYPE" != tag ] &&
+             [ "$(find bin/packages \( -name 'fakeflow-*.apk' -o -name 'luci-app-fakeflow-*.apk' \) 2>/dev/null | wc -l)" -eq 2 ] &&
              diff -qr "$GITHUB_WORKSPACE/ebpf" package/fakeflow/src/ebpf >/dev/null &&
              diff -qr "$GITHUB_WORKSPACE/config" package/fakeflow/src/config >/dev/null &&
              diff -qr "$GITHUB_WORKSPACE/packaging/luci" package/luci-app-fakeflow >/dev/null &&
@@ -69,6 +72,7 @@ jobs:
           ./scripts/feeds install libbpf elfutils zlib iproute2 luci-base rpcd libubox jsonfilter
           if [ -f package/fakeflow/Makefile ]; then make package/fakeflow/clean; fi
           if [ -f package/luci-app-fakeflow/Makefile ]; then make package/luci-app-fakeflow/clean; fi
+          rm -rf package/fakeflow/src package/luci-app-fakeflow
           mkdir -p package/fakeflow/src package/luci-app-fakeflow
           git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
           rm -f package/fakeflow/src/packaging/openwrt/Makefile package/fakeflow/src/packaging/luci/Makefile
@@ -100,7 +104,7 @@ jobs:
           find "$RUNNER_TEMP/sdk/bin/packages" \( -name 'fakeflow-*.apk' -o -name 'luci-app-fakeflow-*.apk' \) -exec cp '{}' dist/ \;
           test "$(find dist -name '*.apk' | wc -l)" -eq 2
           cp packaging/openwrt/INSTALL-25.12.md dist/INSTALL.md
-          printf 'OpenWrt SDK: %s\nTest kernel: %s\nTarget: x86/64 (x86_64, musl); LuCI: noarch\nSource: %s\n' "$OPENWRT_VERSION" "$OPENWRT_KERNEL" "$GITHUB_SHA" > dist/BUILD.txt
+          printf 'OpenWrt SDK: %s\nTest kernel: %s\nTarget: x86/64 (x86_64, musl); LuCI: noarch\nSource: %s\n' "$OPENWRT_VERSION" "$OPENWRT_KERNEL" "$(git rev-parse HEAD)" > dist/BUILD.txt
           (cd dist && sha256sum *.apk > SHA256SUMS)
       - name: Install APK and cache signed runtime/test dependencies
         run: |
