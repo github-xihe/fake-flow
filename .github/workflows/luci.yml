@@ -50,6 +50,7 @@ jobs:
           ./scripts/feeds install libbpf elfutils zlib iproute2 luci-base rpcd libubox jsonfilter
           if [ -f package/fakeflow/Makefile ]; then make package/fakeflow/clean; fi
           if [ -f package/luci-app-fakeflow/Makefile ]; then make package/luci-app-fakeflow/clean; fi
+          find bin/packages -name 'luci-app-fakeflow_*.ipk' -delete
           mkdir -p package/fakeflow/src
           git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
           # SDK scans nested Makefiles too; these are packaging recipes, not sources.
@@ -81,6 +82,7 @@ jobs:
           find "$RUNNER_TEMP/sdk/bin/packages" -name 'luci-app-fakeflow_*.ipk' -exec cp '{}' dist/ \;
           find "$RUNNER_TEMP/sdk/bin/packages" -name 'fakeflow_*.ipk' -exec cp '{}' build/luci-packages/ \;
           test "$(find dist -name '*.ipk' | wc -l)" -eq 1
+          test -f dist/luci-app-fakeflow_0.1.0-r1_all.ipk
           cp dist/*.ipk build/luci-packages/
           cp packaging/luci/INSTALL.md dist/
           printf 'OpenWrt SDK: %s\nArchitecture: all (LuCI only)\nSource: %s\n' "$OPENWRT_VERSION" "$GITHUB_SHA" > dist/BUILD.txt

@@ -140,7 +140,7 @@ def main():
                         page.goto(f'http://127.0.0.1:{port}/cgi-bin/luci/admin/services/fakeflow')
                         page.locator('input[name="luci_username"]').fill('root')
                         page.locator('input[name="luci_password"]').fill('Fakeflow-test-24')
-                        page.locator('input[type="submit"], button[type="submit"]').first.click()
+                        page.get_by_role('button', name='Log in', exact=True).click()
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=60000)
                         expect(page.locator('#ff-start')).to_be_enabled()
 
@@ -152,11 +152,17 @@ def main():
 
                         tab('TCP')
                         expect(field('tcp_payload_file')).to_have_value('/etc/fakehttp/payload.tls')
+                        field('tcp_payload').select_option('http')
+                        expect(field('tcp_hostname')).to_be_visible()
+                        expect(field('tcp_payload_file')).not_to_be_visible()
+                        field('tcp_payload').select_option('custom')
+                        expect(field('tcp_payload_file')).to_have_value('/etc/fakehttp/payload.tls')
                         page.screenshot(path='build/luci-desktop.png', full_page=True)
                         page.locator('#ff-preview').click()
                         expect(page.locator('.modal pre')).to_contain_text('payload_file = "/etc/fakehttp/payload.tls"')
                         page.get_by_role('button', name='关闭', exact=True).click()
                         tab('UDP')
+                        field('udp_trigger').select_option('both')
                         field('udp_initial_packets').fill('6')
                         page.locator('#ff-validate').click()
                         expect(page.get_by_text('Configuration valid;', exact=False)).to_be_visible(timeout=15000)
@@ -168,6 +174,7 @@ def main():
                         page.get_by_role('button', name=re.compile(r'^Save & Apply$|^保存并应用$')).click()
                         expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
                         assert 'initial_packets = 6' in rpc('get')['config']
+                        assert 'trigger = "both"' in rpc('get')['config']
                         page.locator('#ff-stop').click()
                         expect(page.locator('#fakeflow-status')).to_contain_text('已停止', timeout=30000)
                         page.locator('#ff-start').click()

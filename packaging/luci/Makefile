@@ -4,11 +4,11 @@ PKG_NAME:=luci-app-fakeflow
 PKG_VERSION:=0.1.0
 PKG_RELEASE:=1
 PKG_LICENSE:=GPL-2.0-only
-PKGARCH:=all
 
 include $(INCLUDE_DIR)/package.mk
 
 define Package/luci-app-fakeflow
+  PKGARCH:=all
   SECTION:=luci
   CATEGORY:=LuCI
   SUBMENU:=3. Applications
