@@ -146,7 +146,18 @@ def main():
                     context.tracing.start(screenshots=True, snapshots=True)
                     page = context.new_page()
                     errors = []
-                    page.on('pageerror', lambda e: errors.append(str(e)))
+                    def page_error(error):
+                        message = str(error)
+                        session_id = page.evaluate('window.L && L.env && L.env.sessionid')
+                        # 25.12's stock login page requests the private luci UCI
+                        # config before authentication. Do not grant anonymous
+                        # access to hide this upstream login-page rejection.
+                        if session_id == '0' * 32 and message.startswith(
+                                'RPC call to uci/get failed with error -32002: Access denied'):
+                            print('Stock anonymous LuCI login: private UCI request denied (expected).')
+                        else:
+                            errors.append(message)
+                    page.on('pageerror', page_error)
                     try:
                         page.goto(f'http://127.0.0.1:{port}/cgi-bin/luci/admin/services/fakeflow')
                         page.locator('input[name="luci_username"]').fill('root')
@@ -223,7 +234,7 @@ def main():
                             output = run('python3 /tmp/fakeflow-tests/tests/netns/' + test, timeout=900)
                             print(output)
                         finally:
-                            print(run('cat /tmp/fakeflow-tests/build/*-daemon.log'))
+                            print(run('cat /tmp/fakeflow-tests/build/*-daemon.log 2>/dev/null || true'))
             finally:
                 guest.close(force=True)
                 server.shutdown()
