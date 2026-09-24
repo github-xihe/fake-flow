@@ -71,6 +71,20 @@ Ethernet 与 PPPoE 两组各提交 148 个假包，正常路径 `clone_failed`�
 
 安装方法见 [OpenWrt 25.12 APK 安装说明](../packaging/openwrt/INSTALL-25.12.md)。
 
+2026-09-24，正式发布 [0.1.0](https://github.com/lilu0826/fake-flow/releases/tag/0.1.0)，
+标签指向 `5b8ce2f8d89036d4f8652c05038d74b5b1868741`。
+[Release OpenWrt packages](https://github.com/lilu0826/fake-flow/actions/runs/35979768126)
+从该标签在 GitHub Actions 重新构建 OpenWrt 24.10.5 的主程序/LuCI IPK 与 25.12.5 的主程序/LuCI APK，
+通过上述双架构回归、6.6/PVE 6.8 加载、LuCI/procd 和原生 6.12 流量检查后自动发布。
+24.10 LuCI 测试使用最终发布的主程序 IPK；发布任务逐一核对包的源码提交、SDK 版本与 SHA256，
+先上传完整附件到草稿，再公开 Release。四个包的 SHA256 与上文已验证版本相同。
+Release 同时提供统一校验清单、构建来源及两个系统的安装说明。
+
+发布工作流首轮 arm64 NAT 检查出现抓包计数不一致：程序记录提交 10 个假包，首跳捕获 8 个；
+首跳文件同时缺失一组服务端已捕获且业务回显成功的正常 UDP 往返。
+保留原始抓包和失败记录，同标签、同代码、同断言重跑该任务后通过（工作流 attempt 2），
+未修改程序或放宽断言；其他构建和测试复用本次运行中已成功的结果。
+
 ## 实现选择
 
 - TCP/UDP LRU map 使用独立的 1024 槽锁数组，因为 LRU map 不支持内嵌 `bpf_spin_lock`。同一流固定映射到同一锁，helper 在锁外调用。驱逐仍可能丢失覆盖和去重历史，全局预算继续限制注入。
