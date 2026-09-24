@@ -90,6 +90,11 @@ return view.extend({
 			o = interfaces.option(form.ListValue, 'mode', '模式'); o.rmempty = false; o.default = 'pppoe';
 			o.value('pppoe', '物理 PPPoE'); o.value('ethernet', '普通以太网'); o.value('l3', 'L3 / 逻辑 PPP 接口');
 		}
+		// Preview/validation also parse the JSONMap. Always read current inputs,
+		// including values changed back to their initial value after a preview.
+		m.children.forEach(function(section) {
+			section.children.forEach(function(option) { option.forcewrite = true; });
+		});
 		this.statusNode = E('div', { 'class': 'cbi-section', 'id': 'fakeflow-status' });
 		this.logsNode = E('pre', { 'id': 'fakeflow-logs', 'style': 'max-height:22em;overflow:auto;white-space:pre-wrap' });
 		this.paintStatus(data);

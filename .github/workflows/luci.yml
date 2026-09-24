@@ -31,10 +31,11 @@ jobs:
           path: |
             ${{ runner.temp }}/sdk
             ${{ runner.temp }}/rootfs.tar.gz
-          key: openwrt-24.10.5-x86_64-sdk-deps-v1
+          key: openwrt-24.10.5-x86_64-luci-sdk-deps-v1
+          restore-keys: openwrt-24.10.5-x86_64-sdk-deps-v1
       - name: Download verified SDK
-        if: steps.sdk-cache.outputs.cache-hit != 'true'
         run: |
+          [ ! -d "$RUNNER_TEMP/sdk" ] || exit 0
           base="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64"
           curl -fL --retry 3 "$base/openwrt-sdk-24.10.5-x86-64_gcc-13.3.0_musl.Linux-x86_64.tar.zst" -o "$RUNNER_TEMP/sdk.tar.zst"
           echo "d3e8ea62fc1c12f93a9c808c2ef4c01b6e149ee240bcd5a74d15bebcbc385bdd  $RUNNER_TEMP/sdk.tar.zst" | sha256sum -c -
@@ -48,12 +49,14 @@ jobs:
           if [ ! -d feeds/base ]; then ./scripts/feeds update -a; fi
           ./scripts/feeds install libbpf elfutils zlib iproute2 luci-base rpcd libubox jsonfilter
           if [ -f package/fakeflow/Makefile ]; then make package/fakeflow/clean; fi
+          if [ -f package/luci-app-fakeflow/Makefile ]; then make package/luci-app-fakeflow/clean; fi
           mkdir -p package/fakeflow/src
           git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
           # SDK scans nested Makefiles too; these are packaging recipes, not sources.
           rm -f package/fakeflow/src/packaging/openwrt/Makefile package/fakeflow/src/packaging/luci/Makefile
           cp "$GITHUB_WORKSPACE/packaging/openwrt/Makefile" package/fakeflow/Makefile
-          cp -a "$GITHUB_WORKSPACE/packaging/luci" package/luci-app-fakeflow
+          mkdir -p package/luci-app-fakeflow
+          cp -a "$GITHUB_WORKSPACE/packaging/luci/." package/luci-app-fakeflow/
           cat > .config <<'EOF'
           CONFIG_ALL_NONSHARED=n
           CONFIG_ALL_KMODS=n
@@ -65,6 +68,13 @@ jobs:
           make defconfig
           set -o pipefail
           make -j2 package/luci-app-fakeflow/compile V=s BPF_CLANG=clang 2>&1 | tee "$RUNNER_TEMP/luci-build.log"
+      - uses: actions/cache/save@v4
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ${{ runner.temp }}/sdk
+            ${{ runner.temp }}/rootfs.tar.gz
+          key: openwrt-24.10.5-x86_64-luci-sdk-deps-v1
       - name: Collect packages
         run: |
           mkdir -p dist build/luci-packages

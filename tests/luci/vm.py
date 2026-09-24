@@ -43,7 +43,9 @@ def main():
             guest.logfile_read = log
 
             def run(command, timeout=60):
-                guest.sendline(command + "; rc=$?; printf '\\n__FF_RC_%s__\\n' \"$rc\"")
+                guest.sendline("printf '\\n__FF_BEGIN__\\n'; " + command +
+                               "; rc=$?; printf '\\n__FF_RC_%s__\\n' \"$rc\"")
+                guest.expect(r'\r*\n__FF_BEGIN__\r*\n', timeout=timeout)
                 guest.expect(r'\r*\n__FF_RC_(\d+)__\r*\n', timeout=timeout)
                 output = guest.before
                 assert guest.match.group(1) == '0', f'{command}\n{output}'
@@ -68,7 +70,6 @@ def main():
                 guest.expect('Please press Enter to activate this console')
                 guest.sendline('')
                 guest.expect(r'root@[^:]+:.*#')
-                run('stty -echo')
                 run('for i in $(seq 1 60); do ip link show br-lan >/dev/null 2>&1 && break; sleep 1; done; '
                     'ip addr add 10.0.2.15/24 dev br-lan && ip route add default via 10.0.2.2 dev br-lan')
                 run(f'mkdir -p /packages && wget -qO /tmp/packages.tar.gz {base}/packages.tar.gz && '
@@ -159,6 +160,11 @@ def main():
                         field('udp_initial_packets').fill('6')
                         page.locator('#ff-validate').click()
                         expect(page.get_by_text('Configuration valid;', exact=False)).to_be_visible(timeout=15000)
+                        field('udp_initial_packets').fill('5')
+                        page.locator('#ff-preview').click()
+                        expect(page.locator('.modal pre')).to_contain_text('initial_packets = 5')
+                        page.get_by_role('button', name='关闭', exact=True).click()
+                        field('udp_initial_packets').fill('6')
                         page.get_by_role('button', name=re.compile(r'^Save & Apply$|^保存并应用$')).click()
                         expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
                         assert 'initial_packets = 6' in rpc('get')['config']
