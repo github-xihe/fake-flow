@@ -5,7 +5,6 @@ import http.server
 import json
 import os
 from pathlib import Path
-import re
 import shlex
 import socket
 import sys
@@ -171,7 +170,7 @@ def main():
                         expect(page.locator('.modal pre')).to_contain_text('initial_packets = 5')
                         page.get_by_role('button', name='关闭', exact=True).click()
                         field('udp_initial_packets').fill('6')
-                        page.get_by_role('button', name=re.compile(r'^Save & Apply$|^保存并应用$')).click()
+                        page.locator('.cbi-page-actions .cbi-button-apply').click()
                         expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
                         assert 'initial_packets = 6' in rpc('get')['config']
                         assert 'trigger = "both"' in rpc('get')['config']
@@ -181,7 +180,7 @@ def main():
                         expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
                         # A console edit must not get overwritten by an old browser form.
                         run("printf '\\n# changed externally\\n' >> /etc/fakeflow.toml")
-                        page.get_by_role('button', name=re.compile(r'^Save$|^保存$')).click()
+                        page.locator('.cbi-page-actions .cbi-button-save').click()
                         expect(page.get_by_text('配置已被其他页面或终端修改，请重新加载后再保存。').first).to_be_visible(timeout=15000)
                         assert '# changed externally' in rpc('get')['config']
                         page.reload()

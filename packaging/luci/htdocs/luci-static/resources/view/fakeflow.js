@@ -123,6 +123,7 @@ return view.extend({
 	},
 	paintStatus: function(data) {
 		var state = decode(data.status, {}), stats = decode(data.stats, {});
+		var expanded = this.statusNode.querySelector('details[open]') !== null;
 		var text = state.running ? (data.managed ? '运行中 · procd 托管' : '运行中 · 手动实例') : '已停止';
 		var cards = [['fake_submit_ok', '假包提交成功'], ['tcp_synack_eligible', 'TCP 可注入握手'],
 			['udp_early_seen', 'UDP 初期报文'], ['builder_failed', '假包构造失败']];
@@ -130,7 +131,7 @@ return view.extend({
 			E('p', {}, ['配置世代：' + (state.generation == null ? '—' : state.generation) + '；开机启动：' + (data.autostart ? '是' : '否')]),
 			E('div', { 'style': 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1em' }, cards.map(function(c) {
 				return E('div', {}, [E('strong', { 'style': 'font-size:1.5em' }, [stats[c[0]] == null ? '—' : String(stats[c[0]])]), E('div', {}, [c[1]])]);
-			})), E('details', {}, [E('summary', {}, ['全部计数器']),
+			})), E('details', { 'open': expanded ? '' : null }, [E('summary', {}, ['全部计数器']),
 				E('table', { 'class': 'table' }, Object.keys(stats).map(function(k) {
 					return E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td' }, [k]), E('td', { 'class': 'td' }, [String(stats[k])])]);
 				}))]));
