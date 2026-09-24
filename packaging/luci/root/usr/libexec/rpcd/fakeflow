@@ -1,0 +1,166 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# rpcd exec plugin. All paths and commands are fixed; request text is never run.
+. /usr/share/libubox/jshn.sh
+umask 077
+config_file=/etc/fakeflow.toml
+service=/etc/init.d/fakeflow
+lockdir=/var/lock/fakeflow-luci
+temporary=
+locked=0
+saved=0
+
+cleanup() {
+	[ -z "$temporary" ] || rm -f "$temporary"
+	if [ "$locked" = 1 ]; then rm -f "$lockdir/pid"; rmdir "$lockdir"; fi
+}
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM
+
+revision() {
+	{ cat "$config_file"; uci -q export fakeflow; "$service" enabled >/dev/null 2>&1; echo "boot=$?"; } | sha256sum | cut -d ' ' -f 1
+}
+reply() {
+	json_init
+	json_add_boolean ok "$1"
+	json_add_string message "$2"
+	json_add_boolean saved "$saved"
+	json_add_string revision "$(revision)"
+	json_dump
+	exit 0
+}
+acquire() {
+	mkdir -p /var/lock
+	if ! mkdir "$lockdir" 2>/dev/null; then
+		local owner
+		owner="$(cat "$lockdir/pid" 2>/dev/null)"
+		case "$owner" in ''|*[!0-9]*) reply 0 '另一个配置操作正在执行，请稍后重试。';; esac
+		if kill -0 "$owner" 2>/dev/null; then reply 0 '另一个配置操作正在执行，请稍后重试。'; fi
+		rm -f "$lockdir/pid"
+		rmdir "$lockdir" 2>/dev/null && mkdir "$lockdir" 2>/dev/null || reply 0 '配置锁繁忙，请稍后重试。'
+	fi
+	locked=1
+	printf '%s\n' "$$" > "$lockdir/pid"
+}
+is_running() { /usr/sbin/fakeflow status >/dev/null 2>&1; }
+is_managed() {
+	ubus call service list '{"name":"fakeflow"}' 2>/dev/null |
+		jsonfilter -e '@.fakeflow.instances.*.running' 2>/dev/null | grep -q '^true$'
+}
+guard_manual() {
+	if is_running && ! is_managed; then
+		reply 0 '发现手动启动的 fakeflow。请先在原终端停止该实例，再通过 LuCI 启动服务。'
+	fi
+}
+wait_state() {
+	local expected="$1" i=0
+	while [ "$i" -lt 8 ]; do
+		if is_running; then [ "$expected" = 1 ] && return 0
+		else [ "$expected" = 0 ] && return 0; fi
+		i=$((i+1)); sleep 1
+	done
+	return 1
+}
+run_action() {
+	local action="$1" output
+	guard_manual
+	if [ "$action" != stop ]; then
+		[ "$(uci -q get fakeflow.main.enabled)" = 1 ] || reply 0 '请先勾选启用服务并保存。'
+		output="$(/usr/sbin/fakeflow validate --config "$config_file" 2>&1)" || reply 0 "$output"
+	fi
+	output="$("$service" "$action" 2>&1)" || reply 0 "$output"
+	if [ "$action" = stop ]; then
+		wait_state 0 || reply 0 '停止尚未完成，请查看运行日志。'
+	else
+		wait_state 1 || reply 0 '配置已保存，但服务未就绪。请检查接口、内核支持和运行日志。'
+	fi
+}
+status() {
+	local state stats logs enabled=0 boot=0 managed=0
+	state="$(/usr/sbin/fakeflow status 2>/dev/null)" || state='{"running":false}'
+	stats="$(/usr/sbin/fakeflow stats --json 2>/dev/null)" || stats='{}'
+	logs="$(logread -e fakeflow 2>/dev/null | tail -n 60)"
+	[ "$(uci -q get fakeflow.main.enabled)" != 1 ] || enabled=1
+	"$service" enabled >/dev/null 2>&1 && boot=1
+	is_managed && managed=1
+	json_init
+	json_add_boolean ok 1
+	json_add_boolean enabled "$enabled"
+	json_add_boolean autostart "$boot"
+	json_add_boolean managed "$managed"
+	json_add_string status "$state"
+	json_add_string stats "$stats"
+	json_add_string logs "$logs"
+}
+
+case "$1" in
+	list)
+		printf '%s\n' '{"get":{},"status":{},"validate":{"config":""},"save":{"config":"","revision":"","enabled":true,"autostart":true,"apply":true},"action":{"action":""}}'
+		exit 0;;
+	call) ;;
+	*) exit 1;;
+esac
+
+case "$2" in
+	get)
+		acquire
+		[ -f "$config_file" ] || reply 0 '找不到 /etc/fakeflow.toml，请先安装 fakeflow。'
+		[ "$(wc -c < "$config_file")" -le 32768 ] || reply 0 '配置超过 32 KiB，请先精简注释或重复内容。'
+		status
+		json_add_string config "$(cat "$config_file")"
+		json_add_string revision "$(revision)"
+		json_add_string devices "$(ip -j link show 2>/dev/null)"
+		json_dump; exit 0;;
+	status) status; json_dump; exit 0;;
+	validate|save|action) ;;
+	*) reply 0 '不支持的操作。';;
+esac
+
+input="$(head -c 262145)"
+[ "${#input}" -le 262144 ] || reply 0 '请求过大。'
+json_load "$input" || reply 0 '无效的 JSON 请求。'
+json_get_var content config
+json_get_var expected revision
+json_get_var enabled enabled
+json_get_var boot autostart
+json_get_var apply apply
+json_get_var action action
+json_get_type enabled_type enabled
+json_get_type boot_type autostart
+json_get_type apply_type apply
+json_get_type content_type config
+acquire
+
+if [ "$2" = action ]; then
+	case "$action" in start|stop|restart|reload) run_action "$action"; reply 1 '服务操作已完成。';;
+		*) reply 0 '不支持的服务操作。';; esac
+fi
+
+[ "$content_type" = string ] && [ -n "$content" ] && [ "${#content}" -le 32768 ] || reply 0 '配置必须是非空文本，且不超过 32 KiB。'
+temporary="$(mktemp /etc/.fakeflow-luci.XXXXXX)" || reply 0 '无法创建临时配置。'
+printf '%s\n' "$content" > "$temporary" || reply 0 '无法写入临时配置。'
+output="$(/usr/sbin/fakeflow validate --config "$temporary" 2>&1)" || reply 0 "$output"
+[ "$2" != validate ] || reply 1 "$output"
+
+[ "$enabled_type" = boolean ] && [ "$boot_type" = boolean ] && [ "$apply_type" = boolean ] || reply 0 '服务开关必须是布尔值。'
+[ -n "$expected" ] && [ "$expected" = "$(revision)" ] || reply 0 '配置已被其他页面或终端修改，请重新加载后再保存。'
+[ ! -L "$config_file" ] || reply 0 '配置文件是符号链接，请在终端管理该配置。'
+[ "$apply" != 1 ] || guard_manual
+
+# Keep the last saved config for recovery. No change is made on validation or
+# revision failure. Atomic rename prevents readers from seeing partial TOML.
+cp -p "$config_file" /etc/fakeflow.toml.luci-backup || reply 0 '无法备份原配置。'
+old_enabled="$(uci -q get fakeflow.main.enabled)"
+uci set fakeflow.main=service && uci set "fakeflow.main.enabled=$enabled" && uci commit fakeflow || reply 0 '无法保存服务开关。'
+if ! mv -f "$temporary" "$config_file"; then
+	uci set "fakeflow.main.enabled=${old_enabled:-0}"; uci commit fakeflow
+	reply 0 '无法替换配置文件。'
+fi
+temporary=
+saved=1
+if [ "$boot" = 1 ]; then "$service" enable; else "$service" disable; fi || reply 0 '配置已保存，但设置开机启动失败。'
+if [ "$apply" = 1 ]; then
+	if [ "$enabled" = 1 ]; then run_action restart; else run_action stop; fi
+	reply 1 '配置已保存并应用。'
+fi
+reply 1 '配置已保存；运行中的服务尚未应用这些修改。'

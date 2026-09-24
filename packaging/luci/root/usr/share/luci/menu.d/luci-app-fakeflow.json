@@ -1,0 +1,8 @@
+{
+  "admin/services/fakeflow": {
+    "title": "FakeFlow",
+    "order": 60,
+    "action": { "type": "view", "path": "fakeflow" },
+    "depends": { "acl": [ "luci-app-fakeflow" ] }
+  }
+}

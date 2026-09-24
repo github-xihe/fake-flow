@@ -1,0 +1,7 @@
+{
+  "luci-app-fakeflow": {
+    "description": "Configure and control FakeFlow",
+    "read": { "ubus": { "fakeflow": [ "get", "status" ] } },
+    "write": { "ubus": { "fakeflow": [ "validate", "save", "action" ] } }
+  }
+}

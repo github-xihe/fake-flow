@@ -74,6 +74,11 @@ TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据�
 
 ## 部署与测试
 
+OpenWrt 24.10 可安装独立的 **luci-app-fakeflow**，在 **服务 → FakeFlow** 中修改
+现有 TOML 配置、设置自定义载荷路径、启停服务及查看统计和日志。
+安装、保存与应用的行为见 [LuCI 安装说明](packaging/luci/INSTALL.md)。
+GitHub Actions 的 `OpenWrt LuCI package` 工作流提供 IPK，并测试真实 OpenWrt LuCI 页面。
+
 - [systemd unit](packaging/systemd/fakeflow.service)：安装到 `/etc/systemd/system/` 后按通常方式启用。
 - OpenWrt 24.10 x86_64 安装包由 [OpenWrt 打包工作流](https://github.com/lilu0826/fake-flow/actions/workflows/openwrt.yml) 使用官方 24.10.5 SDK 构建。成功运行的 `fakeflow-openwrt-24.10-x86_64` artifact 包含 `.ipk`、校验值与安装说明；详见 [安装指南](packaging/openwrt/INSTALL.md)。其他架构需使用匹配的 SDK 重新构建。
 - `pppoe-wan` 通常使用 `l3`；底层承载 PPPoE 的物理口使用 `pppoe`。不能同时处理同一逻辑/物理路径，当前实例保守拒绝混合配置 `l3` 和 `pppoe`。
