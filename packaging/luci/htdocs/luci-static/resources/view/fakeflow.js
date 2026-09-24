@@ -23,7 +23,7 @@ function select(s, tab, key, title, choices, description) {
 }
 function value(s, tab, key, title, description) {
 	var o = s.taboption(tab, form.Value, key, title, description), spec = config.fields[key];
-	if (spec && spec[0] === 'number') o.datatype = 'range(' + spec[2] + ',' + spec[3] + ')';
+	if (spec && spec[0] === 'number') o.datatype = 'and(uinteger,range(' + spec[2] + ',' + spec[3] + '))';
 	o.rmempty = false; o.retain = true; return o;
 }
 
@@ -145,21 +145,19 @@ return view.extend({
 		ui.addNotification(null, E('p', {}, [result.message]), 'info');
 		return status().then(this.paintStatus.bind(this));
 	},
-	control: function(name) { return action(name).then(this.result.bind(this)); },
-	check: function() { return this.candidate().then(function(c) { return validate(c.config); }).then(this.result.bind(this)); },
+	reportError: function(e) { ui.addNotification(null, E('p', {}, [e.message]), 'danger'); },
+	control: function(name) { return action(name).then(this.result.bind(this)).catch(this.reportError); },
+	check: function() { return this.candidate().then(function(c) { return validate(c.config); }).then(this.result.bind(this)).catch(this.reportError); },
 	preview: function() {
 		return this.candidate().then(function(c) {
 			ui.showModal('TOML 预览', [E('pre', { 'style': 'max-height:60vh;overflow:auto' }, [c.config]),
 				E('div', { 'class': 'right' }, [E('button', { 'class': 'cbi-button', 'click': ui.hideModal }, ['关闭'])])]);
-		});
+		}).catch(this.reportError);
 	},
 	persist: function(apply) {
 		return this.candidate().then(function(c) {
 			return save(c.config, this.revision, c.enabled, c.autostart, apply);
-		}.bind(this)).then(this.result.bind(this)).catch(function(e) {
-			ui.addNotification(null, E('p', {}, [e.message]), 'danger');
-			throw e;
-		});
+		}.bind(this)).then(this.result.bind(this)).catch(this.reportError);
 	},
 	handleSave: function() { return this.persist(false); },
 	handleSaveApply: function() { return this.persist(true); },

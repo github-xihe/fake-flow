@@ -42,6 +42,8 @@ LuCI 包与 CPU 架构无关，FakeFlow 主程序仍需匹配设备架构。
 
 ```sh
 cp -a /path/to/fake-flow/packaging/luci package/luci-app-fakeflow
+# 防止 SDK 将主程序源码内的打包示例再次识别为独立软件包。
+rm -f package/fakeflow/src/packaging/openwrt/Makefile package/fakeflow/src/packaging/luci/Makefile
 ./scripts/feeds update -a
 ./scripts/feeds install luci-base rpcd libubox jsonfilter
 echo CONFIG_PACKAGE_luci-app-fakeflow=m >> .config

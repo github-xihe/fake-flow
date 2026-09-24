@@ -50,6 +50,8 @@ jobs:
           if [ -f package/fakeflow/Makefile ]; then make package/fakeflow/clean; fi
           mkdir -p package/fakeflow/src
           git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
+          # SDK scans nested Makefiles too; these are packaging recipes, not sources.
+          rm -f package/fakeflow/src/packaging/openwrt/Makefile package/fakeflow/src/packaging/luci/Makefile
           cp "$GITHUB_WORKSPACE/packaging/openwrt/Makefile" package/fakeflow/Makefile
           cp -a "$GITHUB_WORKSPACE/packaging/luci" package/luci-app-fakeflow
           cat > .config <<'EOF'
@@ -62,7 +64,7 @@ jobs:
           EOF
           make defconfig
           set -o pipefail
-          make -j2 package/fakeflow/compile package/luci-app-fakeflow/compile V=s BPF_CLANG=clang 2>&1 | tee "$RUNNER_TEMP/luci-build.log"
+          make -j2 package/luci-app-fakeflow/compile V=s BPF_CLANG=clang 2>&1 | tee "$RUNNER_TEMP/luci-build.log"
       - name: Collect packages
         run: |
           mkdir -p dist build/luci-packages

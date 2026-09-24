@@ -85,6 +85,10 @@ def main():
                 run('test ! -e /tmp/should-not-exist')
                 rpc('save', dict(config=original['config'], revision='stale',
                                  enabled=True, autostart=True, apply=False), ok=False)
+                rpc('save', dict(config=original['config'] + '\nunknown = 1', revision=original['revision'],
+                                 enabled=True, autostart=True, apply=True), ok=False)
+                rpc('save', dict(config=original['config'], revision=original['revision'],
+                                 enabled='1', autostart=True, apply=False), ok=False)
                 assert rpc('get')['revision'] == original['revision']
                 custom = original['config'].replace('payload = "http"', 'payload = "custom"').replace(
                     'hostname = "www.example.com"', 'payload_file = "/etc/fakehttp/payload.tls"')
@@ -110,6 +114,18 @@ def main():
                 rpc('action', {'action': 'restart'}, ok=False)
                 run('fakeflow stop; sleep 1')
                 assert not json.loads(rpc('status')['status'])['running']
+                # Exercise rpcd's actual ACL resolution, not just the ACL JSON structure.
+                run("uci set rpcd.viewer=login; uci set rpcd.viewer.username=viewer; "
+                    "uci set 'rpcd.viewer.password=$p$root'; "
+                    "uci add_list rpcd.viewer.read=luci-app-fakeflow; "
+                    "uci commit rpcd; /etc/init.d/rpcd restart; sleep 2")
+                out = run("ubus call session login '{\"username\":\"viewer\",\"password\":\"Fakeflow-test-24\"}'")
+                session = json.loads(out[out.index('{'):out.rindex('}') + 1])['ubus_rpc_session']
+                for method in ['get', 'status', 'save', 'validate', 'action']:
+                    request = json.dumps(dict(ubus_rpc_session=session, scope='ubus', object='fakeflow', function=method))
+                    out = run('ubus call session access ' + shlex.quote(request))
+                    allowed = json.loads(out[out.index('{'):out.rindex('}') + 1])['access']
+                    assert allowed is (method in ['get', 'status']), (method, allowed)
                 print('RPC validation, stale edit protection, custom payload, procd and manual-instance tests passed.')
 
                 with sync_playwright() as pw:
