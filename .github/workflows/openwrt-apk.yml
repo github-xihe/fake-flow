@@ -1,0 +1,127 @@
+name: OpenWrt 25.12 APK and kernel tests
+on:
+  push:
+    paths:
+      - 'ebpf/**'
+      - 'config/**'
+      - 'packaging/openwrt/**'
+      - 'packaging/luci/**'
+      - 'tests/luci/**'
+      - 'tests/netns/protocols.py'
+      - 'tests/netns/l3.py'
+      - '.github/workflows/openwrt-apk.yml'
+      - 'Makefile'
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  x86_64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      OPENWRT_VERSION: 25.12.5
+      OPENWRT_KERNEL: 6.12.94
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configuration module tests
+        run: node tests/luci/config.test.cjs
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang llvm flex bison gawk gettext libncurses-dev libssl-dev python3-setuptools python3-venv qemu-system-x86 rsync swig unzip zstd file wget
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install pexpect playwright==1.55.0
+          "$RUNNER_TEMP/venv/bin/playwright" install --with-deps chromium
+      - uses: actions/cache/restore@v4
+        id: sdk-cache
+        with:
+          path: |
+            ${{ runner.temp }}/sdk
+            ${{ runner.temp }}/rootfs.tar.gz
+          key: openwrt-25.12.5-x86_64-apk-sdk-v1
+      - name: Download verified SDK and rootfs
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          base="https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64"
+          curl -fL --retry 3 "$base/openwrt-sdk-25.12.5-x86-64_gcc-14.3.0_musl.Linux-x86_64.tar.zst" -o "$RUNNER_TEMP/sdk.tar.zst"
+          echo "0c8df0151a1e88feb7c03d694d61f6a18d51872815b7c811d76e2b77504d5e9c  $RUNNER_TEMP/sdk.tar.zst" | sha256sum -c -
+          mkdir "$RUNNER_TEMP/sdk"
+          tar --zstd -xf "$RUNNER_TEMP/sdk.tar.zst" --strip-components=1 -C "$RUNNER_TEMP/sdk"
+          curl -fL --retry 3 "$base/openwrt-$OPENWRT_VERSION-x86-64-rootfs.tar.gz" -o "$RUNNER_TEMP/rootfs.tar.gz"
+          echo "2dae4250b1b742062ed5787adcdc9dd6d26c7f69f94ced46548eb512d5957e8a  $RUNNER_TEMP/rootfs.tar.gz" | sha256sum -c -
+      - name: Build native APK packages
+        working-directory: ${{ runner.temp }}/sdk
+        run: |
+          if [ ! -d feeds/base ]; then ./scripts/feeds update -a; fi
+          ./scripts/feeds install libbpf elfutils zlib iproute2 luci-base rpcd libubox jsonfilter
+          if [ -f package/fakeflow/Makefile ]; then make package/fakeflow/clean; fi
+          if [ -f package/luci-app-fakeflow/Makefile ]; then make package/luci-app-fakeflow/clean; fi
+          mkdir -p package/fakeflow/src package/luci-app-fakeflow
+          git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
+          rm -f package/fakeflow/src/packaging/openwrt/Makefile package/fakeflow/src/packaging/luci/Makefile
+          cp "$GITHUB_WORKSPACE/packaging/openwrt/Makefile" package/fakeflow/Makefile
+          cp -a "$GITHUB_WORKSPACE/packaging/luci/." package/luci-app-fakeflow/
+          cat > .config <<'EOF'
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL=n
+          CONFIG_PACKAGE_fakeflow=m
+          CONFIG_PACKAGE_luci-app-fakeflow=m
+          CONFIG_USE_APK=y
+          CONFIG_SIGNED_PACKAGES=n
+          EOF
+          make defconfig
+          grep -q '^CONFIG_USE_APK=y' .config
+          set -o pipefail
+          make -j2 package/luci-app-fakeflow/compile V=s BPF_CLANG=clang 2>&1 | tee "$GITHUB_WORKSPACE/build-apk.log"
+      - uses: actions/cache/save@v4
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        with:
+          path: |
+            ${{ runner.temp }}/sdk
+            ${{ runner.temp }}/rootfs.tar.gz
+          key: openwrt-25.12.5-x86_64-apk-sdk-v1
+      - name: Collect APK packages
+        run: |
+          mkdir -p dist
+          find "$RUNNER_TEMP/sdk/bin/packages" \( -name 'fakeflow-*.apk' -o -name 'luci-app-fakeflow-*.apk' \) -exec cp '{}' dist/ \;
+          test "$(find dist -name '*.apk' | wc -l)" -eq 2
+          cp packaging/openwrt/INSTALL-25.12.md dist/INSTALL.md
+          printf 'OpenWrt SDK: %s\nTest kernel: %s\nTarget: x86/64 (x86_64, musl); LuCI: noarch\nSource: %s\n' "$OPENWRT_VERSION" "$OPENWRT_KERNEL" "$GITHUB_SHA" > dist/BUILD.txt
+          (cd dist && sha256sum *.apk > SHA256SUMS)
+      - name: Install APK and cache signed runtime/test dependencies
+        run: |
+          docker import "$RUNNER_TEMP/rootfs.tar.gz" fakeflow-apk:test
+          mkdir -p "$RUNNER_TEMP/apk-cache"
+          docker run --rm --privileged -v "$RUNNER_TEMP/apk-cache:/cache" -v "$GITHUB_WORKSPACE/dist:/packages:ro" fakeflow-apk:test /bin/sh -ec '
+            mkdir -p /var/lock
+            ln -s /cache /etc/apk/cache
+            apk update
+            apk --cache-dir /cache add libbpf libelf zlib ip-full tc-full luci-base rpcd jshn jsonfilter luci-theme-bootstrap uhttpd uhttpd-mod-ubus rpcd-mod-file kmod-sched-bpf kmod-sched-core kmod-dummy kmod-tun kmod-veth scapy tcpdump
+            apk add --allow-untrusted /packages/*.apk
+            fakeflow validate --config /etc/fakeflow.toml
+            sh -n /usr/libexec/rpcd/fakeflow
+            apk info -a fakeflow luci-app-fakeflow
+            test "$(find /cache -name "*.apk" | wc -l)" -gt 5
+          '
+      - name: Test packages, LuCI and packet paths on OpenWrt Linux 6.12
+        run: |
+          curl -fL --retry 3 "https://downloads.openwrt.org/releases/$OPENWRT_VERSION/targets/x86/64/openwrt-$OPENWRT_VERSION-x86-64-generic-ext4-combined.img.gz" -o "$RUNNER_TEMP/openwrt.img.gz"
+          echo "23e2538e8ab0eb52dfed1c65d608ecdb71ffd432dd54885da138ae67cd9e4461  $RUNNER_TEMP/openwrt.img.gz" | sha256sum -c -
+          gzip -dc "$RUNNER_TEMP/openwrt.img.gz" > "$RUNNER_TEMP/openwrt.img" || test "$?" -eq 2
+          FF_APK_CACHE="$RUNNER_TEMP/apk-cache" FF_EXPECT_KERNEL="$OPENWRT_KERNEL" FF_VM_PROTOCOLS=1 "$RUNNER_TEMP/venv/bin/python" tests/luci/vm.py "$RUNNER_TEMP/openwrt.img" dist --apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fakeflow-openwrt-25.12-x86_64-apk
+          path: dist/
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: openwrt-25.12-test-results
+          path: |
+            build-apk.log
+            build/luci-vm.log
+            build/luci-*.png
+            build/luci-*.html
+            build/luci-trace.zip

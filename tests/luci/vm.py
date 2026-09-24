@@ -18,6 +18,9 @@ from playwright.sync_api import sync_playwright, expect
 
 def main():
     disk, packages = Path(sys.argv[1]).resolve(), Path(sys.argv[2])
+    apk = '--apk' in sys.argv[3:]
+    extension = 'apk' if apk else 'ipk'
+    cache = os.environ['FF_APK_CACHE' if apk else 'FF_IPK_CACHE']
     Path('build').mkdir(exist_ok=True)
     with socket.socket() as s:
         s.bind(('127.0.0.1', 0))
@@ -25,10 +28,14 @@ def main():
     with tempfile.TemporaryDirectory(prefix='fakeflow-luci-') as folder:
         serving = Path(folder)
         with tarfile.open(serving / 'packages.tar.gz', 'w:gz') as bundle:
-            ipks = [*packages.glob('*.ipk'), *Path(os.environ['FF_IPK_CACHE']).rglob('*.ipk')]
-            assert len(ipks) > 2
-            for ipk in {p.name: p for p in ipks}.values():
-                bundle.add(ipk, arcname=ipk.name)
+            archives = [*packages.glob('*.' + extension), *Path(cache).rglob('*.' + extension)]
+            assert len(archives) > 2
+            for archive in {p.name: p for p in archives}.values():
+                bundle.add(archive, arcname=archive.name)
+        if os.environ.get('FF_VM_PROTOCOLS') == '1':
+            with tarfile.open(serving / 'tests.tar.gz', 'w:gz') as bundle:
+                for name in ['tests/netns/protocols.py', 'tests/netns/l3.py', 'config/fakeflow.toml']:
+                    bundle.add(name, arcname=name)
         handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=folder)
         with http.server.ThreadingHTTPServer(('127.0.0.1', 0), handler) as server:
             threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -69,10 +76,15 @@ def main():
                 guest.expect('Please press Enter to activate this console')
                 guest.sendline('')
                 guest.expect(r'root@[^:]+:.*#')
+                run('uname -a')
+                if os.environ.get('FF_EXPECT_KERNEL'):
+                    run('test "$(uname -r)" = ' + shlex.quote(os.environ['FF_EXPECT_KERNEL']))
                 run('for i in $(seq 1 60); do ip link show br-lan >/dev/null 2>&1 && break; sleep 1; done; '
                     'ip addr add 10.0.2.15/24 dev br-lan && ip route add default via 10.0.2.2 dev br-lan')
+                install = ('apk --no-network add --allow-untrusted /packages/*.apk' if apk else
+                           'opkg install /packages/*.ipk')
                 run(f'mkdir -p /packages && wget -qO /tmp/packages.tar.gz {base}/packages.tar.gz && '
-                    'tar -xzf /tmp/packages.tar.gz -C /packages && opkg install /packages/*.ipk', timeout=240)
+                    'tar -xzf /tmp/packages.tar.gz -C /packages && ' + install, timeout=300)
                 run("sed -i 's/name = \"eth1\"/name = \"eth0\"/' /etc/fakeflow.toml; "
                     "printf 'Fakeflow-test-24\\nFakeflow-test-24\\n' | passwd root; "
                     '/etc/init.d/rpcd restart; /etc/init.d/uhttpd restart')
@@ -201,6 +213,17 @@ def main():
                         browser.close()
                 rpc('action', {'action': 'stop'})
                 run('test -z "$(tc filter show dev eth0 ingress)" && test -z "$(tc filter show dev eth0 egress)"')
+                if os.environ.get('FF_VM_PROTOCOLS') == '1':
+                    run(f'mkdir -p /tmp/fakeflow-tests/build && wget -qO /tmp/tests.tar.gz {base}/tests.tar.gz && '
+                        'tar -xzf /tmp/tests.tar.gz -C /tmp/fakeflow-tests && '
+                        'ln -s /usr/sbin/fakeflow /tmp/fakeflow-tests/build/fakeflow && '
+                        'ln -s /usr/lib/fakeflow/fakeflow.bpf.o /tmp/fakeflow-tests/build/fakeflow.bpf.o')
+                    for test in ['protocols.py', 'protocols.py --pppoe', 'l3.py']:
+                        try:
+                            output = run('python3 /tmp/fakeflow-tests/tests/netns/' + test, timeout=900)
+                            print(output)
+                        finally:
+                            print(run('cat /tmp/fakeflow-tests/build/*-daemon.log'))
             finally:
                 guest.close(force=True)
                 server.shutdown()
