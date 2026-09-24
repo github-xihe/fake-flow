@@ -7,6 +7,7 @@ import signal
 import subprocess as sp
 import sys
 import tempfile
+import threading
 import time
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -19,7 +20,7 @@ def run(*args, check=True):
     return p
 
 def inside():
-    from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, AsyncSniffer, sendp, PPPoE, PPP, Dot1Q
+    from scapy.all import Ether, IP, IPv6, TCP, UDP, Raw, AsyncSniffer, sendp, PPPoE, PPP, Dot1Q, fragment, IPv6ExtHdrFragment
     from scapy.layers.inet import in4_chksum
     from scapy.layers.inet6 import in6_chksum
     from scapy.utils import checksum
@@ -30,6 +31,8 @@ def inside():
         run("ip", "link", "set", name, "up")
     run("tc", "qdisc", "add", "dev", "wan", "clsact")
     run("tc", "filter", "add", "dev", "wan", "egress", "pref", "10", "matchall", "action", "pass")
+    # TCX observers must coexist with a pre-existing legacy ingress filter.
+    run("tc", "filter", "add", "dev", "wan", "ingress", "pref", "1", "matchall", "action", "pass")
     with tempfile.TemporaryDirectory(prefix="ff-test-") as directory:
         tmp = Path(directory)
         config = tmp / "test.toml"
@@ -44,9 +47,10 @@ def inside():
         def command(name, check=True):
             return run(BIN, name, "--runtime-dir", tmp / "run", check=check)
         def capture(packet, inbound=False):
+            ready = threading.Event()
             sniff = AsyncSniffer(iface="peer", store=True, filter=f"ether src {local_mac}",
-                                 lfilter=lambda p: TCP in p or UDP in p)
-            sniff.start(); time.sleep(.06)
+                                 lfilter=lambda p: IP in p or IPv6 in p, started_callback=ready.set)
+            sniff.start(); assert ready.wait(3), "capture startup timed out"
             sendp(packet, iface="peer" if inbound else "wan", verbose=False)
             time.sleep(.08)
             return list(sniff.stop())
@@ -73,6 +77,20 @@ def inside():
             else:
                 assert in6_chksum(proto, net, bytes(transport)) == 0, packet.show(dump=True)
                 assert net.hlim == 3
+        def fragments(transport, inbound=False, size=1472):
+            wire = frame(transport, inbound)
+            net = IP(bytes(wire[IP]))
+            prefix = wire.copy()
+            prefix[IP].underlayer.remove_payload()
+            if PPPoE in prefix: prefix[PPPoE].len = None
+            return [Ether(bytes(prefix / part)) for part in fragment(net, fragsize=size)]
+        def verify_frag_fake(packet):
+            verify(packet)
+            assert packet[IP].frag == 0 and not (int(packet[IP].flags) & 1)
+            assert packet[UDP].len == len(bytes(packet[UDP]))
+            if PPPoE in packet:
+                assert packet[PPPoE].sessionid == 123
+                assert packet[PPPoE].len == len(bytes(packet[IP])) + 2
         try:
             for _ in range(300):
                 if process.poll() is not None:
@@ -151,6 +169,40 @@ def inside():
             reverse=capture(first,True)
             assert len(reverse)==2
             for packet in reverse:verify(packet)
+            # First IPv4 UDP fragments trigger once per datagram; later pieces
+            # (including out-of-order ones) are unchanged and consume no budget.
+            for zero_checksum in (False, True):
+                port=50000+int(zero_checksum)
+                parts=fragments(UDP(sport=port,dport=5060,chksum=0 if zero_checksum else None)/Raw(b"f"*1470))
+                assert len(parts)==2 and parts[0][IP].len==1492
+                before=json.loads(command("stats").stdout)
+                assert [bytes(p) for p in capture(parts[1])] == [bytes(parts[1])]
+                for batch in range(6):
+                    got=capture(parts)
+                    fakes=[p for p in got if p[IP].ttl==3]
+                    originals=[p for p in got if p[IP].ttl!=3]
+                    assert [bytes(p) for p in originals] == [bytes(p) for p in parts]
+                    assert len(fakes)==(2 if batch<5 else 0), command("stats").stdout
+                    for fake in fakes: verify_frag_fake(fake)
+                after=json.loads(command("stats").stdout)
+                assert after["udp_early_seen"]-before["udp_early_seen"]==5
+                assert after["udp_window_exhausted"]-before["udp_window_exhausted"]==1
+            # Unsolicited incoming fragments still cannot cause reflection;
+            # after one local reply, incoming first fragments can trigger both.
+            incoming=fragments(UDP(sport=5060,dport=50100)/Raw(b"i"*1470),True)
+            assert not capture(incoming,True)
+            assert len(capture(frame(UDP(sport=50100,dport=5060)/Raw(b"reply"))))==3
+            got=capture(incoming,True);assert len(got)==2
+            for fake in got: verify_frag_fake(fake)
+            # Invalid/truncated UDP first fragments and TCP/IPv6 fragments pass.
+            invalid=frame(UDP(sport=50200,dport=5060,len=8)/Raw(b"12345678"))
+            invalid[IP].flags="MF"
+            tiny=frame(Raw(b"1234"));tiny[IP].proto=17;tiny[IP].flags="MF"
+            ipv6frag=frame(IPv6ExtHdrFragment(m=1)/UDP(sport=50201,dport=5060)/Raw(b"x"*16),ipv6=True)
+            tcpfrags=fragments(TCP(sport=50202,dport=443,flags="S")/Raw(b"x"*1600))
+            for packet in [invalid,tiny,ipv6frag,*tcpfrags]:
+                got=capture(packet)
+                assert len(got)==1 and bytes(got[0])==bytes(packet)
             # Atomic reload changes the payload on new flows; invalid reload preserves it.
             config.write_text(text.replace("www.example.com", "new.example.org"))
             assert command("reload").stdout.startswith("OK")
@@ -177,6 +229,17 @@ def inside():
                 packets=capture(frame(TCP(sport=443,dport=25500,flags="SA",seq=4,ack=2),True,ipv6),True)
                 assert len(packets)==2
                 for p in packets:verify(p);assert bytes(p[TCP].payload)==binary
+            # Tiny originals force growth; odd and maximum custom payloads
+            # exercise fresh checksums without reading the missing fragments.
+            for size in (1,399,1200):
+                payload_file.write_bytes(binary[:size]);config.write_text(custom);command("reload")
+                parts=fragments(UDP(sport=51000+size,dport=5060)/Raw(b"x"*64),size=8)
+                got=capture(parts)
+                fakes=[p for p in got if p[IP].ttl==3]
+                assert len(fakes)==2
+                assert [bytes(p) for p in got if p[IP].ttl!=3]==[bytes(p) for p in parts]
+                for fake in fakes:
+                    verify_frag_fake(fake);assert bytes(fake[UDP].payload)==binary[:size]
             # Lease expiry stops both TFO mutation and injection while daemon is paused.
             process.send_signal(signal.SIGSTOP);time.sleep(4.3)
             syn=frame(TCP(sport=26000,dport=443,flags="S",seq=1,options=[(34,b"abcd")]))
@@ -199,6 +262,7 @@ def inside():
             assert process.wait(timeout=5)==0
             filters=run("tc","filter","show","dev","wan","egress").stdout
             assert "pref 10 " in filters and "pref 1 " not in filters, filters
+            assert "pref 1 " in run("tc","filter","show","dev","wan","ingress").stdout
             print("PASS: IPv4/IPv6, active/passive TCP, TFO with data, checksums, repeat limits, UDP, reload, lease, missing builder, TC coexistence and cleanup")
         finally:
             if process.poll() is None:

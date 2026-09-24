@@ -70,14 +70,15 @@ payload_file = "/etc/fakeflow/tcp.bin"
 # custom 模式不要同时填写 hostname。
 ```
 
-TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、IP 分片、IPv4 选项、IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
+TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、TCP 分片、IPv4 选项、IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。IPv4 UDP 的首片（offset=0、MF=1、含完整 UDP 头）可触发注入，无需重组；后续分片不触发、不占用初期窗口。假包是重新计算校验和的完整 UDP 报文，真实分片保持不变。IPv6 分片仍不支持。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
 
 ## 部署与测试
 
 - [systemd unit](packaging/systemd/fakeflow.service)：安装到 `/etc/systemd/system/` 后按通常方式启用。
 - OpenWrt 24.10 x86_64 安装包由 [OpenWrt 打包工作流](https://github.com/lilu0826/fake-flow/actions/workflows/openwrt.yml) 使用官方 24.10.5 SDK 构建。成功运行的 `fakeflow-openwrt-24.10-x86_64` artifact 包含 `.ipk`、校验值与安装说明；详见 [安装指南](packaging/openwrt/INSTALL.md)。其他架构需使用匹配的 SDK 重新构建。
 - `pppoe-wan` 通常使用 `l3`；底层承载 PPPoE 的物理口使用 `pppoe`。不能同时处理同一逻辑/物理路径，当前实例保守拒绝混合配置 `l3` 和 `pppoe`。
-- 程序使用 TC priority 1；该优先级已有过滤器时拒绝启动并报告冲突。停止后保留 clsact，避免误删其他程序在运行期间添加的过滤器。
+- 入站使用 Linux 6.6+ 的 TCX，启动时以 `BPF_F_BEFORE` 挂到队首，先于默认追加的 `pppoe-relay-bpf` 执行；放行返回 `TCX_NEXT` 的等价值，继续 relay/其他过滤器。只需配置光猫侧上游口及 `mode = "pppoe"`，不需改 relay。其他程序若随后主动插到队首，仍可能改变顺序。
+- 出站使用 TC priority 1；该优先级已有过滤器时拒绝启动并报告冲突。停止时释放自己的 TCX link、保留其他程序和 clsact。私有 dummy/TUN 仍用于假包构造。编译需要 libbpf 1.3+。
 
 ```sh
 sudo apt-get install --no-install-recommends python3-scapy nftables tcpdump ethtool

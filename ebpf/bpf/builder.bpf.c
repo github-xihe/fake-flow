@@ -46,6 +46,7 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     __u32 oldsum=0;
     __u8 block[64];
     for(int i=0;i<64;i++) {
+        if(p.first_fragment) break;
         __u32 off=p.l4+i*64;
         if(off>=p.end) break;
         __u32 n=p.end-off;if(n>64)n=64;
@@ -71,6 +72,8 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     }
     if(p.key.family==4) {
         __builtin_memcpy(ip+12,p.key.local,4);__builtin_memcpy(ip+16,p.key.remote,4);
+        /* The injected datagram is complete, independent of the real fragments. */
+        if(p.first_fragment)write16(ip+6,0);
         write16(ip+2,iplen+transport);ip[8]=r->ttl;ip[10]=ip[11]=0;
         __u16 sum=fold_checksum(bpf_csum_diff(0,0,(__be32*)ip,40,0));
         __builtin_memcpy(ip+10,&sum,2);
@@ -87,7 +90,7 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
         __builtin_memcpy(th+16,&p.checksum,2);
     } else {
         write16(th+4,transport);cs=p.l4+6;
-        __builtin_memcpy(th+6,&p.checksum,2);
+        if(!p.first_fragment)__builtin_memcpy(th+6,&p.checksum,2);
     }
     __u32 newsum=bpf_csum_diff(0,0,(__be32*)th,20,0);
     /* Linux 6.6 limits csum_diff scratch space to 512 bytes. Fixed 80-byte
@@ -102,6 +105,17 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
     }
     __u64 delta=(__u64)(~oldsum)+newsum;
     delta=(delta&0xffffffff)+(delta>>32);
+    __u32 pseudo=0;
+    if(p.first_fragment) {
+        /* The original UDP checksum covers missing fragments; it cannot seed
+         * an incremental update. Start at one's-complement zero, then apply
+         * data and pseudo-header sums separately. l4_csum_replace ignores the
+         * data sum for CHECKSUM_PARTIAL and produces its correct offload seed. */
+        __builtin_memset(block,0,sizeof(block));
+        __builtin_memcpy(block,ip+12,8);block[9]=17;write16(block+10,transport);
+        pseudo=bpf_csum_diff(0,0,(__be32*)block,12,0);
+        delta=newsum;th[6]=th[7]=0xff;
+    }
     if(bpf_skb_change_tail(skb,length,0)) return -1;
     if(p.l3) {
         if(bpf_skb_store_bytes(skb,0,eth,14,BPF_F_RECOMPUTE_CSUM)) return -1;
@@ -117,8 +131,10 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
        bpf_skb_store_bytes(skb,p.l4,th,thlen,BPF_F_RECOMPUTE_CSUM) ||
        store_payload(skb,p.l4+thlen,t->data,payload)) return -1;
     __u64 flags=p.key.protocol==17?BPF_F_MARK_MANGLED_0:0;
-    if(bpf_l4_csum_replace(skb,cs,0,delta,flags) ||
-       bpf_l4_csum_replace(skb,cs,bpf_htonl(p.end-p.l4),bpf_htonl(transport),4|BPF_F_PSEUDO_HDR|flags)) return -1;
+    if(bpf_l4_csum_replace(skb,cs,0,delta,flags)) return -1;
+    if(p.first_fragment) {
+        if(bpf_l4_csum_replace(skb,cs,0,pseudo,BPF_F_PSEUDO_HDR|flags)) return -1;
+    } else if(bpf_l4_csum_replace(skb,cs,bpf_htonl(p.end-p.l4),bpf_htonl(transport),4|BPF_F_PSEUDO_HDR|flags)) return -1;
     bpf_csum_level(skb,BPF_CSUM_LEVEL_RESET);
     return 0;
 }

@@ -85,8 +85,8 @@ int ff_check(const struct ff_options *o) {
             fprintf(stderr,"%s: missing interface or incompatible link mode\n",o->devices[i].name);failed=1;continue;
         }
         printf("%s: ifindex=%u mtu=%u mode=%u\n",o->devices[i].name,idx,mtu,o->devices[i].mode);
-        if(ff_priority_available(o->devices[i].name,"ingress") || ff_priority_available(o->devices[i].name,"egress")) {
-            fprintf(stderr,"%s: TC priority 1 is occupied or tc inspection failed\n",o->devices[i].name);failed=1;
+        if(ff_priority_available(o->devices[i].name,"egress")) {
+            fprintf(stderr,"%s: TC egress priority 1 is occupied or tc inspection failed\n",o->devices[i].name);failed=1;
         }
     }
     printf("Flow map storage estimate (before kernel overhead): %llu bytes\n",

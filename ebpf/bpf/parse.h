@@ -6,7 +6,7 @@ struct packet {
     struct ff_key key;
     __u32 l3,l4,end,hlen,bytes,seq,ack;
     __u16 checksum;
-    __u8 ttl,flags,eth[22];
+    __u8 ttl,flags,first_fragment,eth[22];
 };
 static __always_inline __u16 read16(const __u8 *p) {return ((__u16)p[0]<<8)|p[1];}
 static __always_inline __u32 read32(const __u8 *p) {return ((__u32)read16(p)<<16)|read16(p+2);}
@@ -45,7 +45,12 @@ static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *ifac
     if(bpf_skb_load_bytes(skb,off,h,20)) return -1;
     if((h[0]>>4)==4 && (iface->mode==FF_L3 || proto==0x800)) {
         if(h[0]!=0x45) return -1;
-        if(read16(h+6)&0x3fff) {stat(FF_SKIP_FRAGMENT);return -1;}
+        __u16 frag=read16(h+6);
+        /* A UDP first fragment contains the tuple. Never treat later fragments
+         * as transport headers or consume the early-packet window for them. */
+        if((frag&0x1fff) || ((frag&0x2000) && h[9]!=17)) {stat(FF_SKIP_FRAGMENT);return -1;}
+        p->first_fragment=!!(frag&0x2000);
+        if(p->first_fragment && ((frag&0xc000) || read16(h+2)<28 || ((read16(h+2)-20)&7))) return -1;
         p->key.family=4;p->key.protocol=h[9];p->ttl=h[8];
         p->end=off+read16(h+2);p->l4=off+20;
         __builtin_memcpy(p->key.local,in?h+16:h+12,4);
@@ -65,7 +70,10 @@ static __always_inline int parse(struct __sk_buff *skb,struct ff_interface *ifac
         __builtin_memcpy(&p->checksum,h+16,2);
     } else if(p->key.protocol==17) {
         if(p->end<p->l4+8 || bpf_skb_load_bytes(skb,p->l4,h,8)) return -1;
-        if(read16(h+4)!=p->end-p->l4) return -1;
+        __u32 udp_len=read16(h+4),present=p->end-p->l4;
+        if(p->first_fragment) {
+            if(udp_len<=present || udp_len>65515) return -1;
+        } else if(udp_len!=present) return -1;
         p->hlen=8;__builtin_memcpy(&p->checksum,h+6,2);
         if(p->key.family==6 && !p->checksum) return -1;
     } else return -1;

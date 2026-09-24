@@ -24,6 +24,8 @@ struct runtime {
     struct bpf_object *obj;
     struct ff_options options;
     struct ff_attachment attached[FF_INTERFACES*2+4];unsigned count;
+    /* Unpinned TCX links detach on process exit, including SIGKILL. */
+    struct bpf_link *ingress[FF_INTERFACES];
     unsigned index[FF_INTERFACES], generation[FF_INTERFACES], epoch, config_gen;
     unsigned l2,l3;
     int tun,server,lock,route;
@@ -92,6 +94,9 @@ static int attach_one(struct runtime *r,unsigned index,enum bpf_tc_attach_point 
 static void forget_index(struct runtime *r,unsigned idx) {
     if(!idx)return;
     bpf_map_delete_elem(map(r,"interfaces"),&idx);
+    for(unsigned i=0;i<r->options.device_count;i++) if(r->index[i]==idx) {
+        bpf_link__destroy(r->ingress[i]);r->ingress[i]=NULL;
+    }
     for(unsigned i=0;i<r->count;) {
         if(r->attached[i].index==idx) {
             ff_detach(&r->attached[i]);r->attached[i]=r->attached[--r->count];
@@ -108,10 +113,18 @@ static int refresh(struct runtime *r,int initial) {
         }
         if(!exists) {if(initial)return -1;continue;}
         if(!r->index[i]) {
-            if(ff_priority_available(d->name,"ingress") || ff_priority_available(d->name,"egress")) {
-                fprintf(stderr,"%s: TC priority 1 conflict\n",d->name);return -1;
+            if(ff_priority_available(d->name,"egress")) {
+                fprintf(stderr,"%s: TC egress priority 1 conflict\n",d->name);return -1;
             }
-            if(attach_one(r,idx,BPF_TC_INGRESS,"ff_ingress",1) || attach_one(r,idx,BPF_TC_EGRESS,"ff_egress",1)) {
+            struct bpf_tcx_opts opts={.sz=sizeof(opts),.flags=BPF_F_BEFORE};
+            struct bpf_link *link=bpf_program__attach_tcx(
+                bpf_object__find_program_by_name(r->obj,"ff_ingress"),idx,&opts);
+            if(!link || libbpf_get_error(link)) {
+                fprintf(stderr,"%s: TCX ingress prepend failed (Linux 6.6+ required)\n",d->name);
+                return -1;
+            }
+            r->ingress[i]=link;r->index[i]=idx;
+            if(attach_one(r,idx,BPF_TC_EGRESS,"ff_egress",1)) {
                 forget_index(r,idx);return -1;
             }
             r->index[i]=idx;r->generation[i]=++r->epoch;
@@ -231,6 +244,7 @@ int ff_run(const char *path,const char *object,const char *runtime) {
     if(libbpf_get_error(r.obj)) {r.obj=NULL;goto out;}
     bpf_map__set_max_entries(bpf_object__find_map_by_name(r.obj,"tcp_flows"),r.options.tcp_entries);
     bpf_map__set_max_entries(bpf_object__find_map_by_name(r.obj,"udp_flows"),r.options.udp_entries);
+    bpf_program__set_expected_attach_type(bpf_object__find_program_by_name(r.obj,"ff_ingress"),BPF_TCX_INGRESS);
     if(bpf_object__load(r.obj))goto out;
     __u64 seed;unsigned zero=0;
     if(getrandom(&seed,sizeof(seed),0)!=(ssize_t)sizeof(seed) ||
@@ -296,6 +310,7 @@ int ff_run(const char *path,const char *object,const char *runtime) {
     rc=0;
 out:
     if(r.obj && map(&r,"leases")>=0) {lease(&r,0);drain_requests(&r);}
+    for(unsigned i=0;i<FF_INTERFACES;i++)bpf_link__destroy(r.ingress[i]);
     for(unsigned i=r.count;i>0;i--)ff_detach(&r.attached[i-1]);
     if(r.tun>=0)close(r.tun);
     if(*r.dummy) {const char *del[]={"ip","link","delete","dev",r.dummy,NULL};ff_command(del);}
