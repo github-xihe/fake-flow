@@ -1,0 +1,163 @@
+name: Release aarch64 APK
+
+on:
+  push:
+    tags: ['aarch64-*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (leave empty for aarch64-<date>-run<number>)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      OPENWRT_VERSION: 25.12.5
+      OPENWRT_TARGET: mediatek/filogic
+      OPENWRT_ARCH: aarch64_cortex-a53
+      SDK_FILE: openwrt-sdk-25.12.5-mediatek-filogic_gcc-14.3.0_musl.Linux-x86_64.tar.zst
+      SDK_SHA256: ff4a38a397caa2cfe1c39e18f84ddede14878221b3593c3f2c4cfe24e3ec4c25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential clang llvm flex bison gawk gettext libncurses-dev libssl-dev python3-setuptools python3-venv rsync swig unzip zstd file wget
+
+      - name: Cache SDK
+        id: sdk-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/sdk
+          key: openwrt-25.12.5-mediatek-filogic-apk-sdk-v1
+
+      - name: Download verified mediatek/filogic SDK
+        if: steps.sdk-cache.outputs.cache-hit != 'true'
+        run: |
+          base="https://downloads.openwrt.org/releases/${OPENWRT_VERSION}/targets/${OPENWRT_TARGET}"
+          curl -fL --retry 3 "$base/$SDK_FILE" -o "$RUNNER_TEMP/sdk.tar.zst"
+          echo "$SDK_SHA256  $RUNNER_TEMP/sdk.tar.zst" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/sdk"
+          tar --zstd -xf "$RUNNER_TEMP/sdk.tar.zst" --strip-components=1 -C "$RUNNER_TEMP/sdk"
+
+      - name: Build aarch64 APK packages
+        working-directory: ${{ runner.temp }}/sdk
+        run: |
+          set -e
+          if [ ! -d feeds/base ]; then ./scripts/feeds update -a; fi
+          ./scripts/feeds install libbpf elfutils zlib iproute2 luci-base rpcd libubox jsonfilter
+          rm -rf package/fakeflow package/luci-app-fakeflow
+          mkdir -p package/fakeflow/src package/luci-app-fakeflow
+          git -C "$GITHUB_WORKSPACE" archive HEAD | tar -x -C package/fakeflow/src
+          rm -f package/fakeflow/src/packaging/openwrt/Makefile package/fakeflow/src/packaging/luci/Makefile
+          cp "$GITHUB_WORKSPACE/packaging/openwrt/Makefile" package/fakeflow/Makefile
+          cp -a "$GITHUB_WORKSPACE/packaging/luci/." package/luci-app-fakeflow/
+          cat > .config <<'EOF'
+          CONFIG_ALL_NONSHARED=n
+          CONFIG_ALL_KMODS=n
+          CONFIG_ALL=n
+          CONFIG_PACKAGE_fakeflow=m
+          CONFIG_PACKAGE_luci-app-fakeflow=m
+          CONFIG_USE_APK=y
+          CONFIG_SIGNED_PACKAGES=n
+          EOF
+          make defconfig
+          grep -q '^CONFIG_USE_APK=y' .config
+          make -j2 package/luci-app-fakeflow/compile V=s BPF_CLANG=clang 2>&1 | tee "$GITHUB_WORKSPACE/build-aarch64.log"
+
+      - name: Prepare release assets
+        run: |
+          set -e
+          mkdir -p dist
+          pkgdir="$RUNNER_TEMP/sdk/bin/packages/${OPENWRT_ARCH}"
+          find "$pkgdir" \( -name 'fakeflow-*.apk' -o -name 'luci-app-fakeflow-*.apk' \) -exec cp '{}' dist/ \;
+          test "$(find dist -name '*.apk' | wc -l)" -eq 2
+          grep -q 'arch:aarch64_cortex-a53' build-aarch64.log
+          printf 'OpenWrt SDK: %s\nTarget: %s\nArch: %s (musl); LuCI: noarch\nSource: %s\n' \
+            "$OPENWRT_VERSION" "$OPENWRT_TARGET" "$OPENWRT_ARCH" "$(git rev-parse HEAD)" > dist/BUILD.txt
+          cp packaging/openwrt/INSTALL-25.12.md dist/INSTALL-25.12.md
+          (cd dist && sha256sum *.apk > SHA256SUMS)
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fakeflow-aarch64-release-assets
+          path: dist/
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: fakeflow-aarch64-release-assets
+          path: dist
+
+      - name: Resolve release tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            tag="${{ github.ref_name }}"
+          elif [ -n "${{ inputs.tag }}" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="aarch64-$(date -u +%Y%m%d)-run${{ github.run_number }}"
+          fi
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "resolved tag: $tag"
+
+      - name: Write release notes
+        run: |
+          cat > NOTES.md <<'EOF'
+          ## FakeFlow aarch64 构建（mediatek/filogic, aarch64_cortex-a53）
+
+          上游只发布 x86_64 包；本 Release 为 ARM 路由器编译的 APK（自用构建，非上游官方产物）。
+
+          | 资产 | 说明 |
+          | --- | --- |
+          | `fakeflow-0.1.0-r4.apk` | 主程序（含 eBPF 对象 `/usr/lib/fakeflow/fakeflow.bpf.o`）|
+          | `luci-app-fakeflow-0.1.0-r1.apk` | LuCI 界面（noarch）|
+          | `SHA256SUMS` / `BUILD.txt` | 校验值与构建来源（SDK/目标/commit）|
+
+          ### 安装（OpenWrt / ImmortalWrt 25.12，aarch64）
+
+          ```sh
+          cd /tmp && sha256sum -c SHA256SUMS
+          apk add --allow-untrusted ./fakeflow-0.1.0-r4.apk ./luci-app-fakeflow-0.1.0-r1.apk
+          fakeflow validate --config /etc/fakeflow.toml
+          fakeflow check    --config /etc/fakeflow.toml
+          ```
+
+          ### 前置条件（重要）
+
+          1. **内核需有 dummy / TUN 支持**：L2（ethernet/pppoe）模式用私有 dummy，L3 模式用 TUN。
+             缺 `kmod-dummy` / `kmod-tun` 时 `fakeflow run` 无法构造假包。
+          2. **同一路径不要与 fakehttp / fakesip 同时注入**（上游实现规格的硬性要求）。
+          3. 有硬件 flow offload 的环境属于上游"未验证"范围，建议先关闭 `flow_offloading_hw` 测试。
+          EOF
+
+      - name: Publish Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -e
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --title "FakeFlow aarch64 $TAG" --notes-file NOTES.md
+          fi
+          echo "=== Release 资产 ==="
+          gh release view "$TAG" --json tagName,name,url,assets \
+            --jq '{tag: .tagName, url: .url, assets: [.assets[] | {name, size, state}]}'
