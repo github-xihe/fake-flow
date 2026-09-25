@@ -41,7 +41,11 @@ static __u64 monotime(void) {
 static int map(struct runtime *r,const char *name) {return bpf_object__find_map_fd_by_name(r->obj,name);}
 static int program(struct runtime *r,const char *name) {return bpf_program__fd(bpf_object__find_program_by_name(r->obj,name));}
 static int lease(struct runtime *r,int enabled) {
-    unsigned zero=0;struct ff_lease_local {__u64 until;} v={enabled?monotime()+r->options.lease*FF_NS:0};
+    unsigned zero=0;
+    /* Layout must match struct ff_lease in maps.h. reported=1 while disabling
+     * keeps a clean shutdown from logging a lease edge. */
+    struct ff_lease_local {__u64 until;__u32 reported;__u32 pad;} v={
+        enabled?monotime()+r->options.lease*FF_NS:0,enabled?0:1,0};
     return bpf_map_update_elem(map(r,"leases"),&zero,&v,BPF_ANY);
 }
 static void drain_requests(struct runtime *r) {

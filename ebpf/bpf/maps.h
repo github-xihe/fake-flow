@@ -18,7 +18,9 @@ struct ff_request {
     __u32 state, ifindex, ifgen, config_gen, mode, reverse, ttl;
     __u32 saved_cb[5];
 };
-struct ff_lease { __u64 until; };
+/* reported is an edge flag: a lease outage is counted once instead of once per
+ * packet, and userspace clears it on every successful refresh. */
+struct ff_lease { __u64 until; __u32 reported; __u32 pad; };
 #define MAP(name,kind,kt,vt,n) struct { __uint(type,kind); __uint(max_entries,n); __type(key,kt); __type(value,vt); } name SEC(".maps")
 MAP(active_config,BPF_MAP_TYPE_ARRAY,__u32,__u32,1);
 MAP(configs,BPF_MAP_TYPE_HASH,__u32,struct ff_config,16);
@@ -44,7 +46,10 @@ static __always_inline struct ff_config *configuration(void) {
 }
 static __always_inline int alive(__u64 now) {
     __u32 z=0; struct ff_lease *l=bpf_map_lookup_elem(&leases,&z);
-    return l && now<l->until;
+    if(!l) return 0;
+    if(now<l->until) return 1;   /* fast path keeps the lease map read-only */
+    if(!l->reported && !__sync_val_compare_and_swap(&l->reported,0,1)) stat(FF_LEASE_EXPIRED);
+    return 0;
 }
 static __always_inline struct ff_lock *flow_lock(struct ff_key *key) {
     __u32 bucket=(key->local_port^key->remote_port^key->ifindex)&1023;

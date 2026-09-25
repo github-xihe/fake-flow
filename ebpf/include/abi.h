@@ -14,7 +14,13 @@ enum ff_stat {
     FF_SKIP_PRIVATE, FF_SKIP_NEAR, FF_TTL_UNKNOWN, FF_SKIP_FRAGMENT,
     FF_SKIP_GSO, FF_SKIP_LAYOUT, FF_MAP_FAILED, FF_REQUEST_EXPIRED,
     FF_RATE_LIMITED, FF_LEASE_EXPIRED, FF_INTERNAL, FF_SKIP_AUTH,
-    FF_SKIP_MTU, FF_TFO_FAILED, FF_STATS_MAX
+    FF_SKIP_MTU, FF_TFO_FAILED,
+    /* Appended: per-reason parse() rejections. The caller used to fold every
+     * parse() failure into skip_layout, which made skip_layout a superset of
+     * skip_gso/skip_fragment and useless for diagnosis. Appended so existing
+     * counter indices keep their meaning. */
+    FF_SKIP_LEN, FF_SKIP_L2, FF_SKIP_IPVER, FF_SKIP_IPV4_OPTS, FF_SKIP_PROTO, FF_SKIP_TRUNC,
+    FF_STATS_MAX
 };
 struct ff_config {
     __u32 generation, tcp_enabled, udp_enabled, directions;

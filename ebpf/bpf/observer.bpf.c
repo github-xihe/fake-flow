@@ -73,7 +73,9 @@ static __always_inline int observe(struct __sk_buff *skb,int in) {
     struct ff_interface *iface=bpf_map_lookup_elem(&interfaces,&idx);
     if(!c || !iface) return TC_ACT_UNSPEC;
     struct packet p={};
-    if(parse(skb,iface,in,&p)) {stat(FF_SKIP_LAYOUT);return TC_ACT_UNSPEC;}
+    /* parse() attributes every rejection to its own counter; do not fold them
+     * into skip_layout here. */
+    if(parse(skb,iface,in,&p)) return TC_ACT_UNSPEC;
     if(!remote_allowed(&p,c)) {stat(FF_SKIP_PRIVATE);return TC_ACT_UNSPEC;}
     __u32 remote_ttl=0;int trigger=0;
     if(p.key.protocol==6 && c->tcp_enabled) trigger=tcp_trigger(skb,&p,c,in,now,&remote_ttl);

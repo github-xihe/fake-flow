@@ -13,7 +13,8 @@ const char *ff_stat_names[FF_STATS_MAX]={
     "skip_private_remote","skip_near_peer","ttl_unestimated","skip_fragment",
     "skip_gso","skip_layout","map_insert_failed","request_expired",
     "rate_limited","lease_expired","internal_loop_blocked","skip_auth",
-    "skip_mtu","tfo_failed"
+    "skip_mtu","tfo_failed",
+    "skip_len","skip_l2","skip_ipver","skip_ipv4_opts","skip_proto","skip_trunc"
 };
 int main(int argc,char **argv) {
     const char *config="/etc/fakeflow.toml",*object="/usr/lib/fakeflow/fakeflow.bpf.o",*runtime=FF_RUNTIME_DIR;

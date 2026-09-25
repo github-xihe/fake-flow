@@ -17,6 +17,19 @@ static int safe_text(const char *s) {
     return 1;
 }
 static void put16(unsigned char *p, unsigned n) {p[0]=n>>8;p[1]=n;}
+/* Fixed-length random hex token. Placeholder constants in the generated
+ * datagram ("fakeflow", "example.com", 192.0.2.1, a bare "Mozilla/5.0") are
+ * trivial DPI fingerprints, so identity fields are derived from the configured
+ * URI and every variable part is randomised per generation. */
+static void hex_token(char *out,unsigned bytes) {
+    static const char d[]="0123456789abcdef";
+    unsigned char r[32];
+    if(bytes>sizeof(r)) bytes=sizeof(r);
+    if(getrandom(r,bytes,0)!=(long)bytes)
+        for(unsigned i=0;i<bytes;i++) r[i]=(unsigned char)(i*37+11);
+    for(unsigned i=0;i<bytes;i++) {out[i*2]=d[r[i]>>4];out[i*2+1]=d[r[i]&15];}
+    out[bytes*2]=0;
+}
 static int tls(struct ff_template *t,const char *hostname) {
     size_t n=strlen(hostname); unsigned char *p=t->data;
     /* TLS 1.2 ClientHello with SNI and a single supported cipher suite. */
@@ -43,7 +56,11 @@ int ff_templates(struct ff_options *o,char *error,size_t cap) {
         if(*o->tcp_file || !safe_text(o->hostname)) goto bad;
         if(!strcmp(o->tcp_payload,"http")) {
             n=snprintf((char*)o->tcp_template.data,FF_PAYLOAD_MAX,
-                "GET / HTTP/1.1\r\nHost: %s\r\nUser-Agent: Mozilla/5.0\r\nAccept: */*\r\nConnection: close\r\n\r\n",o->hostname);
+                "GET / HTTP/1.1\r\nHost: %s\r\n"
+                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36\r\n"
+                "Accept: */*\r\nConnection: close\r\n\r\n",o->hostname);
             if(n<0 || n>=FF_PAYLOAD_MAX) goto bad;
             o->tcp_template.len=n;
         } else if(!strcmp(o->tcp_payload,"tls")) {
@@ -54,12 +71,27 @@ int ff_templates(struct ff_options *o,char *error,size_t cap) {
         if(custom(o->udp_file,&o->udp_template)) goto bad_file;
     } else {
         if(strcmp(o->udp_payload,"sip") || *o->udp_file || !safe_text(o->sip_uri) || strncmp(o->sip_uri,"sip:",4)) goto bad;
-        const char *body="v=0\r\no=- 1 1 IN IP4 192.0.2.1\r\ns=-\r\nc=IN IP4 192.0.2.1\r\nt=0 0\r\nm=audio 49170 RTP/AVP 0\r\n";
+        /* Identity fields come from the configured URI; nothing from this
+         * program's own name or from documentation address ranges is embedded,
+         * because those are stable fingerprints in the produced datagram. */
+        char host[256],user[128],branch[40],tag[16],callid[72],body[400];
+        const char *u=o->sip_uri+4,*at=strchr(u,'@'),*h=at?at+1:u;
+        size_t ul=at?(size_t)(at-u):0,hl=strcspn(h,":;>");
+        if(hl>=sizeof(host)) hl=sizeof(host)-1;
+        if(ul>=sizeof(user)) ul=sizeof(user)-1;
+        if(ul) {memcpy(user,u,ul);user[ul]=0;} else memcpy(user,"caller",7);
+        memcpy(host,h,hl);host[hl]=0;
+        hex_token(branch,16);hex_token(tag,4);hex_token(callid,16);
+        snprintf(body,sizeof(body),
+            "v=0\r\no=- 1 1 IN IP4 %s\r\ns=-\r\nc=IN IP4 %s\r\nt=0 0\r\n"
+            "m=audio 49170 RTP/AVP 0\r\n",host,host);
         n=snprintf((char*)o->udp_template.data,FF_PAYLOAD_MAX,
-            "INVITE %s SIP/2.0\r\nVia: SIP/2.0/UDP 192.0.2.1:5060;branch=z9hG4bKfakeflow\r\n"
-            "Max-Forwards: 70\r\nFrom: <sip:caller@example.com>;tag=1\r\nTo: <%s>\r\n"
-            "Call-ID: fakeflow@example.com\r\nCSeq: 1 INVITE\r\nContact: <sip:caller@192.0.2.1>\r\n"
-            "Content-Type: application/sdp\r\nContent-Length: %zu\r\n\r\n%s",o->sip_uri,o->sip_uri,strlen(body),body);
+            "INVITE %s SIP/2.0\r\nVia: SIP/2.0/UDP %s:5060;branch=z9hG4bK%s\r\n"
+            "Max-Forwards: 70\r\nFrom: <sip:%s@%s>;tag=%s\r\nTo: <%s>\r\n"
+            "Call-ID: %s@%s\r\nCSeq: 1 INVITE\r\nContact: <sip:%s@%s>\r\n"
+            "Content-Type: application/sdp\r\nContent-Length: %zu\r\n\r\n%s",
+            o->sip_uri,host,branch,user,host,tag,o->sip_uri,callid,host,user,host,
+            strlen(body),body);
         if(n<0 || n>=FF_PAYLOAD_MAX) goto bad;
         o->udp_template.len=n;
     }
