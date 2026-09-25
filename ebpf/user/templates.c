@@ -74,7 +74,7 @@ int ff_templates(struct ff_options *o,char *error,size_t cap) {
         /* Identity fields come from the configured URI; nothing from this
          * program's own name or from documentation address ranges is embedded,
          * because those are stable fingerprints in the produced datagram. */
-        char host[256],user[128],branch[40],tag[16],callid[72],body[400];
+        char host[256],user[128],branch[40],tag[16],callid[72],body[640];
         const char *u=o->sip_uri+4,*at=strchr(u,'@'),*h=at?at+1:u;
         size_t ul=at?(size_t)(at-u):0,hl=strcspn(h,":;>");
         if(hl>=sizeof(host)) hl=sizeof(host)-1;
