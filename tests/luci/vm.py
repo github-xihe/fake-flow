@@ -4,6 +4,7 @@ import functools
 import http.server
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import socket
@@ -208,8 +209,22 @@ def main():
                         expect(page.locator('#fakeflow-logs')).to_contain_text('READY generation=', timeout=15000)
                         logtext = run('cat /var/log/fakeflow.log') or ''
                         assert 'READY generation=' in logtext, logtext[-2000:]
+                        # Every line carries its own timestamp and level: the file is
+                        # read without logd now, and the view filters on that level.
+                        assert re.search(r'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d INFO  READY generation=', logtext), logtext[-2000:]
+                        assert ' DEBUG ' not in logtext, logtext[-2000:]
                         syslog = run('logread') or ''
                         assert 'READY generation=' not in syslog, syslog[-2000:]
+                        # A synthetic DEBUG line must be hidden by the default
+                        # 信息及以上 filter, counted in the note, and shown once 全部
+                        # is selected.
+                        run("printf '2026-01-01 00:00:00 DEBUG synthetic-debug-line\\n' >> /var/log/fakeflow.log")
+                        page.locator('#ff-log-refresh').click()
+                        expect(page.locator('#fakeflow-logs')).not_to_contain_text('synthetic-debug-line', timeout=15000)
+                        expect(page.locator('#fakeflow-logs-note')).to_contain_text('已按级别隐藏', timeout=15000)
+                        page.select_option('#ff-log-level', 'debug')
+                        expect(page.locator('#fakeflow-logs')).to_contain_text('synthetic-debug-line', timeout=15000)
+                        page.select_option('#ff-log-level', 'info')
                         # A console edit must not get overwritten by an old browser form.
                         run("printf '\\n# changed externally\\n' >> /etc/fakeflow.toml")
                         page.locator('.cbi-page-actions .cbi-button-save').click()

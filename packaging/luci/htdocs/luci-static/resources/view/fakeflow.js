@@ -125,6 +125,22 @@ return view.extend({
 			button('校验当前表单', this.check, 'ff-validate'), ' ',
 			button('预览 TOML', this.preview, 'ff-preview')
 		]);
+		/* Filtering happens here rather than in the daemon: the file keeps every
+		 * level for post-mortem, the view defaults to hiding DEBUG (where the
+		 * libbpf map and relocation detail lives). Lines written before this
+		 * format existed have no level and are treated as INFO. */
+		this.logLevel = this.logLevel || 'info';
+		var logFilter = E('select', { 'class': 'cbi-input-select', 'id': 'ff-log-level',
+			'change': ui.createHandlerFn(this, function(ev) {
+				this.logLevel = ev.target.value;
+				return status().then(this.paintStatus.bind(this));
+			}) }, [
+			E('option', { 'value': 'debug' }, ['全部（含 DEBUG）']),
+			E('option', { 'value': 'info' }, ['信息及以上']),
+			E('option', { 'value': 'warn' }, ['警告及以上']),
+			E('option', { 'value': 'error' }, ['仅错误'])
+		]);
+		logFilter.value = this.logLevel;
 		var logButton = E('button', { 'class': 'cbi-button cbi-button-action', 'id': 'ff-log-refresh',
 			'click': ui.createHandlerFn(this, function() {
 				return status().then(this.paintStatus.bind(this)).catch(this.reportError);
@@ -135,7 +151,7 @@ return view.extend({
 		var logSection = E('div', { 'class': 'cbi-section', 'id': 'fakeflow-logs-section' }, [
 			E('h3', {}, ['运行日志']),
 			this.logsNote,
-			E('p', {}, [logButton]),
+			E('p', {}, ['级别：', logFilter, ' ', logButton]),
 			this.logsNode
 		]);
 		poll.add(function() {
@@ -163,10 +179,21 @@ return view.extend({
 				E('table', { 'class': 'table' }, Object.keys(stats).map(function(k) {
 					return E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td' }, [k]), E('td', { 'class': 'td' }, [String(stats[k])])]);
 				}))]));
-		var logs = data.logs || '';
-		this.logsNode.textContent = logs || '暂无日志。';
-		this.logsNote.textContent = '来自 /var/log/fakeflow.log（每 5 秒自动刷新；最多显示最近 400 行）'
-			+ (logs ? '，当前 ' + logs.split('\n').length + ' 行。' : '。');
+		/* Level filtering: the daemon stamps every line, the file keeps all levels
+		 * for post-mortem, and this view decides what to display. */
+		var ranks = { ERROR: 0, WARN: 1, INFO: 2, DEBUG: 3 };
+		var limit = ranks[String(this.logLevel || 'info').toUpperCase()];
+		if (typeof limit !== 'number') limit = ranks.INFO;
+		var all = String(data.logs || '').split('\n').filter(function(l) { return l !== ''; });
+		var shown = all.filter(function(line) {
+			var m = line.match(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\s+([A-Z]+)\s/);
+			var rank = m && typeof ranks[m[1]] === 'number' ? ranks[m[1]] : ranks.INFO;
+			return rank <= limit;
+		});
+		this.logsNode.textContent = shown.length ? shown.join('\n') : '暂无日志。';
+		this.logsNote.textContent = '来自 /var/log/fakeflow.log（每 5 秒自动刷新；最多显示最近 400 行）。共 '
+			+ all.length + ' 行，显示 ' + shown.length + ' 行'
+			+ (all.length > shown.length ? '，已按级别隐藏 ' + (all.length - shown.length) + ' 行。' : '。');
 	},
 	candidate: function() {
 		this.map.checkDepends();

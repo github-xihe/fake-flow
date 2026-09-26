@@ -37,7 +37,15 @@ int ff_config_read(const char *path, struct ff_options *out, char *error, size_t
 int ff_templates(struct ff_options *o, char *error, size_t cap);
 int ff_variants(const struct ff_options *o, struct ff_template out[][FF_TEMPLATE_VARIANTS], unsigned n);
 int ff_check(const struct ff_options *o);
-int ff_run(const char *path, const char *object, const char *runtime, const char *logfile);
+/* Levels for the daemon's own log stream. Lines carry a timestamp and their
+ * level because the file is the primary place this output is read (syslog no
+ * longer sees it), and so that both the file and the LuCI view can be filtered.
+ * ff_log_set is called once in run mode; without it the stream is stderr at
+ * FF_LOG_INFO, which keeps CLI diagnostics unchanged. */
+enum { FF_LOG_ERROR = 0, FF_LOG_WARN, FF_LOG_INFO, FF_LOG_DEBUG };
+void ff_log_set(int level);
+void ff_log(int level, const char *format, ...) __attribute__((format(printf,2,3)));
+int ff_run(const char *path, const char *object, const char *runtime, const char *logfile, int log_level);
 int ff_client(const char *runtime, const char *command);
 extern const char *ff_stat_names[FF_STATS_MAX];
 #endif

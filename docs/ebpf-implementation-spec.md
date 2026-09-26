@@ -401,6 +401,13 @@ fakeflow stop
 硬失败仍可从 procd 自己的实例消息在 syslog 看到。LuCI 的「运行日志」一栏从该文件读取
 （rpcd `status` 返回，按行与字节双上限），因此不依赖 logread，也不受 syslog 缓冲区大小影响。
 
+每行由守护进程自己带 `YYYY-MM-DD HH:MM:SS 级别` 前缀（ERROR/WARN/INFO/DEBUG）——文件不再
+交给 logd，时间戳与级别都不能依赖外部添加。libbpf 的输出按 `LIBBPF_WARN/INFO/DEBUG` 映射到
+同名级别，`--log-level`（默认 debug，仅 `run` 生效）决定写入门限；init 脚本传 `info`，因此
+map/重定位这类 DEBUG 细节默认不落盘，而它们是排查加载失败时唯一能拿到 verifier 明细的地方，
+需要时改回 `debug`。读侧（LuCI）再按级别过滤，默认隐藏 DEBUG，这样即使有人把门限放到 debug，
+界面默认仍是干净的一屏。
+
 ## 14. 验收与测试
 
 ### 14.1 P0 必须先通过

@@ -14,7 +14,10 @@ start_service() {
     # procd_set_param stdout/stderr: those flags are what send it to syslog.
     # A hard failure is still visible in syslog through procd's own instance
     # messages, and the daemon's own diagnostics are shown in LuCI → 日志.
-    procd_set_param command /usr/sbin/fakeflow run --config /etc/fakeflow.toml --log-file /var/log/fakeflow.log
+    # --log-level info keeps routine libbpf detail (map/relocation, DEBUG) out of
+    # the file; use debug when reproducing a load failure, because the verifier
+    # dump is DEBUG as well.
+    procd_set_param command /usr/sbin/fakeflow run --config /etc/fakeflow.toml --log-file /var/log/fakeflow.log --log-level info
     procd_set_param respawn 3600 5 5
     procd_set_param file /etc/fakeflow.toml
     procd_set_param limits memlock="unlimited"

@@ -45,7 +45,7 @@ void ff_detach(const struct ff_attachment *r) {
     struct bpf_tc_opts o={.sz=sizeof(o),.priority=r->priority,.handle=r->handle};
     if(!bpf_tc_query(&h,&o) && o.prog_id==r->id) {
         o.prog_id=0;o.prog_fd=0;o.flags=0;
-        if(bpf_tc_detach(&h,&o)) fprintf(stderr,"Cannot detach owned filter on ifindex %u\n",r->index);
+        if(bpf_tc_detach(&h,&o)) ff_log(FF_LOG_WARN,"Cannot detach owned filter on ifindex %u\n",r->index);
     }
     /* Keep clsact: another process may have installed a filter meanwhile. */
 }

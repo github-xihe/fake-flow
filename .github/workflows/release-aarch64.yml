@@ -126,8 +126,8 @@ jobs:
 
           | 资产 | 说明 |
           | --- | --- |
-          | `fakeflow-0.1.0-r15.apk` | 主程序（含 eBPF 对象 `/usr/lib/fakeflow/fakeflow.bpf.o`）|
-          | `luci-app-fakeflow-0.1.0-r3.apk` | LuCI 界面（noarch）|
+          | `fakeflow-0.1.0-r16.apk` | 主程序（含 eBPF 对象 `/usr/lib/fakeflow/fakeflow.bpf.o`）|
+          | `luci-app-fakeflow-0.1.0-r4.apk` | LuCI 界面（noarch）|
           | `SHA256SUMS` / `BUILD.txt` | 校验值与构建来源（SDK/目标/commit）|
 
           ### 安装（OpenWrt / ImmortalWrt 25.12，aarch64）
@@ -137,7 +137,7 @@ jobs:
 
           ```sh
           cd /tmp && sha256sum -c SHA256SUMS
-          apk add --allow-untrusted ./fakeflow-0.1.0-r15.apk ./luci-app-fakeflow-0.1.0-r3.apk
+          apk add --allow-untrusted ./fakeflow-0.1.0-r16.apk ./luci-app-fakeflow-0.1.0-r4.apk
           fakeflow validate --config /etc/fakeflow.toml
           fakeflow check    --config /etc/fakeflow.toml
           ```

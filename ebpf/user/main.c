@@ -18,7 +18,7 @@ const char *ff_stat_names[FF_STATS_MAX]={
 };
 int main(int argc,char **argv) {
     const char *config="/etc/fakeflow.toml",*object="/usr/lib/fakeflow/fakeflow.bpf.o",*runtime=FF_RUNTIME_DIR,*logfile="";
-    int explicit_config=0;
+    int explicit_config=0, log_level=FF_LOG_DEBUG;
     if(argc<2) goto usage;
     for(int i=2;i<argc;i++) {
         if(!strcmp(argv[i],"--json")) continue;
@@ -27,9 +27,20 @@ int main(int argc,char **argv) {
         else if(!strcmp(argv[i],"--object")) object=argv[++i];
         else if(!strcmp(argv[i],"--runtime-dir")) runtime=argv[++i];
         else if(!strcmp(argv[i],"--log-file")) logfile=argv[++i];
+        else if(!strcmp(argv[i],"--log-level")) {
+            const char *l=argv[++i];
+            if(!strcmp(l,"error")) log_level=FF_LOG_ERROR;
+            else if(!strcmp(l,"warn")) log_level=FF_LOG_WARN;
+            else if(!strcmp(l,"info")) log_level=FF_LOG_INFO;
+            else if(!strcmp(l,"debug")) log_level=FF_LOG_DEBUG;
+            else goto usage;
+        }
         else goto usage;
     }
-    if(!strcmp(argv[1],"run")) return ff_run(config,object,runtime,logfile);
+    /* Default DEBUG keeps CLI and test runs as verbose as before; the packaged
+     * init script asks for INFO, which is what keeps routine libbpf detail out
+     * of the log file. */
+    if(!strcmp(argv[1],"run")) return ff_run(config,object,runtime,logfile,log_level);
     if(!strcmp(argv[1],"check") || !strcmp(argv[1],"validate")) {
         struct ff_options o;char error[512];
         if(ff_config_read(config,&o,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
@@ -55,6 +66,6 @@ int main(int argc,char **argv) {
         return ff_client(runtime,argv[1]);
     }
 usage:
-    fprintf(stderr,"Usage: fakeflow {check|validate|run|status|stats|reload|stop} [--config FILE] [--object FILE] [--runtime-dir DIR] [--log-file FILE] [--json]\n");
+    fprintf(stderr,"Usage: fakeflow {check|validate|run|status|stats|reload|stop} [--config FILE] [--object FILE] [--runtime-dir DIR] [--log-file FILE] [--log-level error|warn|info|debug] [--json]\n");
     return 2;
 }

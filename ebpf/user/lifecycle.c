@@ -124,13 +124,13 @@ static int refresh(struct runtime *r,int initial) {
         if(!exists) {if(initial)return -1;continue;}
         if(!r->index[i]) {
             if(ff_priority_available(d->name,"egress")) {
-                fprintf(stderr,"%s: TC egress priority 1 conflict\n",d->name);return -1;
+                ff_log(FF_LOG_ERROR,"%s: TC egress priority 1 conflict\n",d->name);return -1;
             }
             struct bpf_tcx_opts opts={.sz=sizeof(opts),.flags=BPF_F_BEFORE};
             struct bpf_link *link=bpf_program__attach_tcx(
                 bpf_object__find_program_by_name(r->obj,"ff_ingress"),idx,&opts);
             if(!link || libbpf_get_error(link)) {
-                fprintf(stderr,"%s: TCX ingress prepend failed (Linux 6.6+ required)\n",d->name);
+                ff_log(FF_LOG_ERROR,"%s: TCX ingress prepend failed (Linux 6.6+ required)\n",d->name);
                 return -1;
             }
             r->ingress[i]=link;r->index[i]=idx;
@@ -292,6 +292,36 @@ static void ff_log_redirect(const char *path) {
     if(!freopen(path,"a",stderr)) return;
     setvbuf(stdout,NULL,_IOLBF,0);
 }
+/* The daemon's own log stream. Every line carries a timestamp and a level: the
+ * file is the primary place this output is read (syslog no longer sees it) and
+ * the level lets both the file and the LuCI view be filtered. Lines are written
+ * to stderr, which --log-file has already pointed at the log file. Without
+ * ff_log_set the limit stays at DEBUG, so CLI and test runs keep exactly the
+ * diagnostics they had before. */
+static int log_limit=FF_LOG_DEBUG;
+static const char *ff_log_names[]={"ERROR","WARN","INFO","DEBUG"};
+void ff_log_set(int level) {
+    if(level<FF_LOG_ERROR) level=FF_LOG_ERROR;
+    if(level>FF_LOG_DEBUG) level=FF_LOG_DEBUG;
+    log_limit=level;
+}
+void ff_log(int level,const char *format,...) {
+    if(level>log_limit) return;
+    char text[2048];va_list args;
+    va_start(args,format);vsnprintf(text,sizeof(text),format,args);va_end(args);
+    time_t now=time(NULL);struct tm tm;localtime_r(&now,&tm);
+    char stamp[32];strftime(stamp,sizeof(stamp),"%Y-%m-%d %H:%M:%S",&tm);
+    /* One stamp per line: libbpf hands over multi-line blocks (verifier dumps)
+     * and a continuation line without a level could not be filtered. */
+    for(char *line=text;*line;) {
+        char *nl=strchr(line,'\n');
+        if(nl) *nl=0;
+        if(*line) fprintf(stderr,"%s %-5s %s\n",stamp,ff_log_names[level],line);
+        if(!nl) break;
+        line=nl+1;
+    }
+    fflush(stderr);
+}
 /* libbpf forwards the kernel's extack text for every failed netlink call, and two
  * of those failures are expected here. Both the TCX ingress attach and
  * bpf_tc_hook_create() ask for the clsact qdisc, so whichever of the two runs
@@ -299,46 +329,47 @@ static void ff_log_redirect(const char *path) {
  * tool's filters may have been added meanwhile). Measured: 1 message when no
  * qdisc exists yet, 2 when it does; the filters attach and the service runs in
  * both cases. Report the fact once in our own words instead of alarming
- * "Kernel error message" lines at err level. Everything else still goes through. */
+ * "Kernel error message" lines. Everything else keeps its libbpf level, which is
+ * what lets the routine DEBUG chatter be filtered out of the file. */
 static int ff_libbpf_print(enum libbpf_print_level level,const char *format,va_list args) {
-    if(level==LIBBPF_WARN) {
-        char text[256];va_list copy;
-        va_copy(copy,args);vsnprintf(text,sizeof(text),format,copy);va_end(copy);
-        if(strstr(text,"Exclusivity flag on, cannot modify")) {
-            static int reported;
-            if(!reported) {reported=1;fprintf(stderr,"fakeflow: clsact qdisc already present, reusing it\n");}
-            return 0;
-        }
+    char text[2048];va_list copy;
+    va_copy(copy,args);vsnprintf(text,sizeof(text),format,copy);va_end(copy);
+    if(strstr(text,"Exclusivity flag on, cannot modify")) {
+        static int reported;
+        if(!reported) {reported=1;ff_log(FF_LOG_INFO,"clsact qdisc already present, reusing it\n");}
+        return 0;
     }
-    return vfprintf(stderr,format,args);
+    ff_log(level==LIBBPF_WARN?FF_LOG_WARN:(level==LIBBPF_INFO?FF_LOG_INFO:FF_LOG_DEBUG),"%s",text);
+    return 0;
 }
-int ff_run(const char *path,const char *object,const char *runtime,const char *logfile) {
+int ff_run(const char *path,const char *object,const char *runtime,const char *logfile,int log_level) {
     struct runtime r={.tun=-1,.server=-1,.lock=-1,.route=-1};
     char error[1024],lockpath[1024],config_path[1024];int rc=1;__u64 last_reload=0;
     if(snprintf(config_path,sizeof(config_path),"%s",path)>=(int)sizeof(config_path))return 1;
     /* Redirect first, so that a configuration error is still recorded where the
      * operator looks for it. */
     if(logfile && *logfile) ff_log_redirect(logfile);
-    if(geteuid()) {fprintf(stderr,"run requires root\n");return 1;}
+    ff_log_set(log_level);
+    if(geteuid()) {ff_log(FF_LOG_ERROR,"run requires root\n");return 1;}
     libbpf_set_print(ff_libbpf_print);
-    if(ff_config_read(path,&r.options,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
+    if(ff_config_read(path,&r.options,error,sizeof(error))) {ff_log(FF_LOG_ERROR,"%s\n",error);return 1;}
     /* Reject ambiguous logical/physical PPPoE duplication conservatively. */
     unsigned l3=0,pppoe=0;
     for(unsigned i=0;i<r.options.device_count;i++) {l3+=r.options.devices[i].mode==FF_L3;pppoe+=r.options.devices[i].mode==FF_PPPOE;}
-    if(l3 && pppoe) {fprintf(stderr,"Do not combine l3 and physical pppoe paths in one instance\n");return 1;}
+    if(l3 && pppoe) {ff_log(FF_LOG_ERROR,"Do not combine l3 and physical pppoe paths in one instance\n");return 1;}
     if(mkdir(runtime,0700) && errno!=EEXIST) {perror(runtime);return 1;}
     struct stat st;
     if(lstat(runtime,&st) || !S_ISDIR(st.st_mode) || st.st_uid!=geteuid() || (st.st_mode&0077)) {
-        fprintf(stderr,"runtime directory must be owned by root with mode 0700\n");return 1;
+        ff_log(FF_LOG_ERROR,"runtime directory must be owned by root with mode 0700\n");return 1;
     }
     if(snprintf(lockpath,sizeof(lockpath),"%s/lock",runtime)>=(int)sizeof(lockpath) ||
        snprintf(r.state,sizeof(r.state),"%s/filters",runtime)>=(int)sizeof(r.state))return 1;
     r.lock=open(lockpath,O_CREAT|O_RDWR|O_CLOEXEC|O_NOFOLLOW,0600);
-    if(r.lock<0 || flock(r.lock,LOCK_EX|LOCK_NB)) {fprintf(stderr,"another instance owns this runtime directory\n");goto out;}
+    if(r.lock<0 || flock(r.lock,LOCK_EX|LOCK_NB)) {ff_log(FF_LOG_ERROR,"another instance owns this runtime directory\n");goto out;}
     stale_filters(r.state);
     if(ff_check(&r.options))goto out;
     struct rlimit limit={RLIM_INFINITY,RLIM_INFINITY};
-    if(setrlimit(RLIMIT_MEMLOCK,&limit)) fprintf(stderr,"memlock limit unchanged: %s\n",strerror(errno));
+    if(setrlimit(RLIMIT_MEMLOCK,&limit)) ff_log(FF_LOG_WARN,"memlock limit unchanged: %s\n",strerror(errno));
     r.obj=bpf_object__open_file(object,NULL);
     if(libbpf_get_error(r.obj)) {r.obj=NULL;goto out;}
     bpf_map__set_max_entries(bpf_object__find_map_by_name(r.obj,"tcp_flows"),r.options.tcp_entries);
@@ -369,16 +400,16 @@ int ff_run(const char *path,const char *object,const char *runtime,const char *l
     if(refresh(&r,1) || publish(&r,&r.options) || control_socket(&r,runtime) || lease(&r,1))goto out;
     struct sigaction action={.sa_handler=on_signal};sigemptyset(&action.sa_mask);
     sigaction(SIGINT,&action,NULL);sigaction(SIGTERM,&action,NULL);sigaction(SIGHUP,&action,NULL);signal(SIGPIPE,SIG_IGN);
-    printf("READY generation=%u\n",r.config_gen);fflush(stdout);
+    ff_log(FF_LOG_INFO,"READY generation=%u\n",r.config_gen);
     __u64 next_lease=0;
     while(!quitting) {
         __u64 now=monotime();
         if(now>=next_lease) {
-            if(refresh(&r,0) || lease(&r,1)) {fprintf(stderr,"interface refresh or lease failed\n");goto out;}
+            if(refresh(&r,0) || lease(&r,1)) {ff_log(FF_LOG_ERROR,"interface refresh or lease failed\n");goto out;}
             if(now-last_reload>2*FF_NS)reap_configs(&r);
             next_lease=now+2*FF_NS;
         }
-        if(reloading) {reloading=0;int e=reload(&r,config_path,error,sizeof(error));last_reload=now;fprintf(stderr,"reload %s: %s\n",e?"failed":"ok",error);}
+        if(reloading) {reloading=0;int e=reload(&r,config_path,error,sizeof(error));last_reload=now;ff_log(e?FF_LOG_WARN:FF_LOG_INFO,"reload %s: %s\n",e?"failed":"ok",error);}
         struct pollfd fds[2]={{r.server,POLLIN,0},{r.route,POLLIN,0}};
         int n=poll(fds,2,200);if(n<0 && errno!=EINTR)goto out;
         if(fds[1].revents&POLLIN)link_events(&r);
