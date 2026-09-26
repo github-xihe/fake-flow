@@ -15,6 +15,18 @@ struct ff_rand_field { __u16 off, bytes; };
  * ranges, and RENDER runs the generator again for a payload whose randomness
  * lives inside the generator (the TLS ClientHello random). */
 enum ff_variant_kind { FF_VARIANT_SAME = 0, FF_VARIANT_PATCH, FF_VARIANT_RENDER };
+/* One TCP template slot. Slot 0 mirrors the primary template after parsing, so
+ * the publish loop and the variant renderer treat every slot the same way; the
+ * port-matched templates (`https_*`, then each `[[tcp.extra]]`) fill slots 1
+ * upwards in configuration order. */
+struct ff_tcp_slot {
+    char hostname[254], file[1024];
+    struct ff_template tpl;
+};
+/* Payload a port-matched slot generates when no payload file is configured. The
+ * https compatibility keys are always TLS, which is what they have always
+ * produced; an `[[tcp.extra]]` entry picks one explicitly. */
+enum { FF_SLOT_TLS = 0, FF_SLOT_HTTP };
 /* One entry per published template, indexed by FF_TEMPLATE_PLAN(proto, slot). */
 struct ff_plan {
     unsigned kind, variants, rand_count;
@@ -26,11 +38,18 @@ struct ff_options {
     unsigned device_count, tcp_entries, udp_entries, lease;
     char tcp_payload[16], udp_payload[16], hostname[254], sip_uri[254];
     char tcp_file[1024], udp_file[1024];
-    /* Second TCP template, selected by port. It exists only when
+    /* Second TCP template (selected by port). It exists only when
      * https_hostname or https_file is set; the payload kind is implied by which
      * of the two was configured. */
     char https_hostname[254], https_file[1024];
-    struct ff_template tcp_template, tcp_https_template, udp_template;
+    /* Indexed by TCP slot, and always populated for the slots the configuration
+     * defines (slot 0 mirrors the primary template). extra_count is how many
+     * port-matched slots are in use, 0..FF_TCP_EXTRA_MAX. */
+    struct ff_tcp_slot extra[FF_TEMPLATE_SLOTS];
+    unsigned extra_count;
+    /* Payload each port-matched slot generates; see FF_SLOT_TLS/FF_SLOT_HTTP. */
+    unsigned extra_kind[FF_TEMPLATE_SLOTS];
+    struct ff_template tcp_template, udp_template;
     struct ff_plan plan[FF_TEMPLATE_PLAN_COUNT];
 };
 int ff_config_read(const char *path, struct ff_options *out, char *error, size_t cap);

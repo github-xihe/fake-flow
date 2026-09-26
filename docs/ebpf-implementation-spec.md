@@ -315,6 +315,18 @@ hostname = "www.example.com"
 tfo = "strip-syn"      # strip-syn | preserve
 max_batches = 3
 
+# 额外 TCP 模板：数组表，每段一份，按出现顺序占用端口匹配槽位（https_* 永远占第一份，
+# 合计最多 3 份）。ports 必填且不能与其他模板重复；hostname 与 payload_file 只能填其一；
+# payload 只决定由 hostname 生成的载荷，默认 tls。
+# [[tcp.extra]]
+# hostname = "cdn.example.net"
+# ports = [8080]
+#
+# [[tcp.extra]]
+# hostname = "plain.example.net"
+# payload = "http"
+# ports = [8000, 8001]
+
 [udp]
 enabled = true
 trigger = "egress"      # egress | both
@@ -403,10 +415,9 @@ fakeflow stop
 
 每行由守护进程自己带 `YYYY-MM-DD HH:MM:SS 级别` 前缀（ERROR/WARN/INFO/DEBUG）——文件不再
 交给 logd，时间戳与级别都不能依赖外部添加。libbpf 的输出按 `LIBBPF_WARN/INFO/DEBUG` 映射到
-同名级别，`--log-level`（默认 debug，仅 `run` 生效）决定写入门限；init 脚本传 `info`，因此
-map/重定位这类 DEBUG 细节默认不落盘，而它们是排查加载失败时唯一能拿到 verifier 明细的地方，
-需要时改回 `debug`。读侧（LuCI）再按级别过滤，默认隐藏 DEBUG，这样即使有人把门限放到 debug，
-界面默认仍是干净的一屏。
+同名级别。**过滤只在读侧**：写入门限默认 debug（`--log-level` 仅 `run` 生效，作为可选的手动
+限流），init 脚本不传它，因此 map/重定位与内核 verifier 明细都留在文件里——那正是排查加载
+失败唯一能拿到的东西。读侧（LuCI）按级别过滤，默认显示「信息及以上」，这样文件完整、界面干净。
 
 ## 14. 验收与测试
 

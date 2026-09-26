@@ -212,7 +212,15 @@ def main():
                         # Every line carries its own timestamp and level: the file is
                         # read without logd now, and the view filters on that level.
                         assert re.search(r'\d{4}-\d\d-\d\d \d\d:\d\d:\d\d INFO  READY generation=', logtext), logtext[-2000:]
-                        assert ' DEBUG ' not in logtext, logtext[-2000:]
+                        # The write side is deliberately unfiltered — filtering happens
+                        # where the log is read — so the file keeps DEBUG rows and the
+                        # default 信息及以上 filter is what hides them. Verify the real
+                        # row is absent from the rendered view, not just the synthetic one.
+                        debug_line = next((line for line in logtext.splitlines() if ' DEBUG ' in line), '')
+                        assert debug_line, logtext[-2000:]
+                        debug_text = debug_line[20:].strip()[:40]
+                        assert debug_text
+                        expect(page.locator('#fakeflow-logs')).not_to_contain_text(debug_text, timeout=15000)
                         syslog = run('logread') or ''
                         assert 'READY generation=' not in syslog, syslog[-2000:]
                         # A synthetic DEBUG line must be hidden by the default
@@ -225,6 +233,31 @@ def main():
                         page.select_option('#ff-log-level', 'debug')
                         expect(page.locator('#fakeflow-logs')).to_contain_text('synthetic-debug-line', timeout=15000)
                         page.select_option('#ff-log-level', 'info')
+                        # [[tcp.extra]]: the port-matched templates are an array of
+                        # tables, so a row can be added, previewed and saved like an
+                        # interface row and survives the roundtrip through rpcd.
+                        expect(page.get_by_text('端口匹配的 TCP 模板（[[tcp.extra]]）').first).to_be_visible(timeout=15000)
+                        page.locator('button.cbi-button-add').last.click()
+                        page.locator('input[id$=".hostname"]').last.fill('extra.example')
+                        page.locator('input[id$=".ports"]').last.fill('8080')
+                        page.locator('#ff-preview').click()
+                        expect(page.locator('.modal pre')).to_contain_text('[[tcp.extra]]', timeout=15000)
+                        expect(page.locator('.modal pre')).to_contain_text('hostname = "extra.example"')
+                        expect(page.locator('.modal pre')).to_contain_text('ports = [8080]')
+                        page.get_by_role('button', name='关闭', exact=True).click()
+                        page.locator('.cbi-page-actions .cbi-button-apply').click()
+                        expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
+                        stored = rpc('get')['config']
+                        assert '[[tcp.extra]]' in stored, stored[-500:]
+                        assert 'hostname = "extra.example"' in stored, stored[-500:]
+                        assert 'ports = [8080]' in stored, stored[-500:]
+                        # The daemon accepts it and reports the extra slot separately.
+                        validated = run('fakeflow validate --config /etc/fakeflow.toml')
+                        assert 'TCP extra template slot 2: ' in (validated or ''), validated
+                        page.reload()
+                        expect(page.locator('#fakeflow-status')).to_be_visible(timeout=30000)
+                        expect(page.locator('input[id$=".hostname"]')).to_have_value('extra.example', timeout=15000)
+                        expect(page.locator('input[id$=".ports"]')).to_have_value('8080')
                         # A console edit must not get overwritten by an old browser form.
                         run("printf '\\n# changed externally\\n' >> /etc/fakeflow.toml")
                         page.locator('.cbi-page-actions .cbi-button-save').click()

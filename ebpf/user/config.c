@@ -32,6 +32,39 @@ static int boolean(char *v, __u32 *out) {
     else return -1;
     return 0;
 }
+/* [443] or [443, 8443]. A port-matched template is selected by this list alone,
+ * so an empty list, a trailing comma, a duplicate or an out-of-range value is an
+ * error rather than a slot nothing can ever reach. */
+static int ports(char *v, unsigned *out, unsigned *count) {
+    char compact[128]; unsigned n = 0;
+    for (char *p = v; *p && n < sizeof(compact)-1; p++)
+        if (!isspace((unsigned char)*p)) compact[n++] = *p;
+    compact[n] = 0;
+    *count = 0;
+    char *p = compact;
+    if (*p++ != '[' || *p == ']' || !*p) return -1;
+    for (;;) {
+        char *end; errno = 0;
+        if (!isdigit((unsigned char)*p)) return -1;
+        unsigned long num = strtoul(p, &end, 10);
+        if (errno || num < 1 || num > 65535 || end == p) return -1;
+        for (unsigned i = 0; i < *count; i++) if (out[i] == num) return -1;
+        if (*count == FF_HTTPS_PORTS_MAX) return -1;
+        out[(*count)++] = num;
+        p = end;
+        if (*p == ']' && !p[1]) return 0;
+        if (*p != ',') return -1;
+        p++;
+    }
+}
+/* One [[tcp.extra]] entry as written in the file. It only becomes a template slot
+ * after the whole file is read, because the https_* compatibility keys take
+ * slot 1 first whatever order the tables appear in. */
+struct extra {
+    char hostname[254], file[1024], payload[16];
+    unsigned ports[FF_HTTPS_PORTS_MAX], port_count;
+    int ports_given;
+};
 int ff_config_read(const char *path, struct ff_options *o, char *error, size_t cap) {
     memset(o, 0, sizeof(*o));
     o->kernel = (struct ff_config){.tcp_enabled=1,.udp_enabled=1,.directions=3,
@@ -45,6 +78,10 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
     char line[2048], section[32]="", seen[128][96];
     unsigned lineno=0, count=0, version=0, sections_seen=0;
     int bad=0, ports_given=0;
+    unsigned https_ports[FF_HTTPS_PORTS_MAX], https_count=0;
+    struct extra extras[FF_TCP_EXTRA_MAX];
+    unsigned extra_total=0;
+    memset(extras,0,sizeof(extras));
     while (fgets(line,sizeof(line),f)) {
         lineno++;
         if (!strchr(line,'\n') && !feof(f)) { bad=1; break; }
@@ -60,6 +97,12 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
                 if (o->device_count==FF_INTERFACES) { bad=1; break; }
                 o->device_count++; strcpy(section,"interfaces"); continue;
             }
+            /* An array of tables, like [[interfaces]]: each entry becomes one
+             * port-matched TCP template. */
+            if (!strcmp(s,"[[tcp.extra]]")) {
+                if (extra_total==FF_TCP_EXTRA_MAX) { bad=1; break; }
+                extra_total++; strcpy(section,"tcp.extra"); continue;
+            }
             const char *sections[]={"tcp","udp","injection","runtime"};
             int found=0;
             for (unsigned i=0;i<4;i++) {
@@ -74,8 +117,11 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         }
         v=strchr(s,'='); if (!v) { bad=1; break; } *v++=0;
         s=trim(s); v=trim(v);
+        struct extra *x = extra_total ? &extras[extra_total-1] : 0;
         char id[96];
-        if (snprintf(id,sizeof(id),"%s.%u.%s",section,!strcmp(section,"interfaces")?o->device_count:0,s)>=(int)sizeof(id)) { bad=1; break; }
+        unsigned index = !strcmp(section,"interfaces") ? o->device_count :
+                         !strcmp(section,"tcp.extra") ? extra_total : 0;
+        if (snprintf(id,sizeof(id),"%s.%u.%s",section,index,s)>=(int)sizeof(id)) { bad=1; break; }
         for(unsigned i=0;i<count;i++) if (!strcmp(seen[i],id)) bad=1;
         if(bad || count==128) { bad=1; break; }
         strcpy(seen[count++],id);
@@ -115,35 +161,17 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
             if(!strcmp(v,"\"strip-syn\"")) {o->kernel.strip_tfo=1;rc=0;}
             if(!strcmp(v,"\"preserve\"")) {o->kernel.strip_tfo=0;rc=0;}
         }
-        if(KEY("tcp","https_ports")) {
-            /* [443] or [443, 8443]. This list selects the second TCP template
-             * for a connection whose local or remote port matches. An empty
-             * list, a trailing comma, a duplicate or an out-of-range port is an
-             * error rather than something quietly unreachable. */
-            char compact[128]; unsigned n=0;
-            for(char *p=v; *p && n<sizeof(compact)-1; p++) if(!isspace((unsigned char)*p)) compact[n++]=*p;
-            compact[n]=0; rc=0; ports_given=1;
-            char *p=compact;
-            if(*p++!='[' || *p==']' || !*p) rc=-1;
-            while(!rc) {
-                char *end; errno=0;
-                if(!isdigit((unsigned char)*p)) {rc=-1;break;}
-                unsigned long num=strtoul(p,&end,10);
-                if(errno || num<1 || num>65535 || end==p) {rc=-1;break;}
-                for(unsigned i=0;i<o->kernel.port_count;i++)
-                    if(o->kernel.ports[i]==num) {rc=-1;break;}
-                if(rc || o->kernel.port_count==FF_HTTPS_PORTS_MAX) {rc=-1;break;}
-                o->kernel.ports[o->kernel.port_count++]=num;
-                p=end;
-                if(*p==']' && !p[1]) break;
-                if(*p!=',') {rc=-1;break;}
-                p++;
-            }
-        }
+        if(KEY("tcp","https_ports")) {rc=ports(v,https_ports,&https_count);ports_given=!rc;}
         if(KEY("udp","trigger")) {
             if(!strcmp(v,"\"egress\"")) {o->kernel.udp_both=0;rc=0;}
             if(!strcmp(v,"\"both\"")) {o->kernel.udp_both=1;rc=0;}
         }
+        /* [[tcp.extra]]: hostname or payload_file, the payload kind it generates
+         * (tls by default) and the ports that select it. */
+        if (KEY("tcp.extra","hostname") && x) rc=string(v,x->hostname,sizeof(x->hostname));
+        if (KEY("tcp.extra","payload") && x) rc=string(v,x->payload,sizeof(x->payload));
+        if (KEY("tcp.extra","payload_file") && x) rc=string(v,x->file,sizeof(x->file));
+        if (KEY("tcp.extra","ports") && x) {rc=ports(v,x->ports,&x->port_count);x->ports_given=!rc;}
         NUM("tcp","max_batches",o->kernel.tcp_batches,1,32);
         NUM("udp","initial_packets",o->kernel.udp_packets,1,32);
         NUM("udp","idle_timeout_seconds",o->kernel.udp_idle,1,3600);
@@ -173,13 +201,57 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         }
     }
     if(o->kernel.burst<o->kernel.repeat) {snprintf(error,cap,"burst must be >= repeat");return -1;}
-    /* The second TCP template exists only when one of its payload sources is
-     * set, and its port list is only meaningful in that case. Without an
-     * explicit list it is selected on 443, which is what the predecessor
-     * injected as "https". */
+    /* Port-matched slots, in configuration order. The https_* compatibility keys
+     * take slot 1 when either is set (which is what they have always done) and
+     * each [[tcp.extra]] entry takes the next free slot. A slot with no port list
+     * is absent, so its connections keep the primary template. */
+    unsigned slot=1;
     if(*o->https_hostname || *o->https_file) {
-        if(!ports_given) {o->kernel.ports[0]=443;o->kernel.port_count=1;}
-    } else o->kernel.port_count=0;
+        strcpy(o->extra[slot].hostname,o->https_hostname);
+        strcpy(o->extra[slot].file,o->https_file);
+        o->extra_kind[slot]=FF_SLOT_TLS;
+        /* Without an explicit list it is selected on 443, which is what the
+         * predecessor injected as "https". */
+        if(!ports_given) {o->kernel.ports[slot][0]=443;o->kernel.port_count[slot]=1;}
+        else {
+            for(unsigned i=0;i<https_count;i++) o->kernel.ports[slot][i]=https_ports[i];
+            o->kernel.port_count[slot]=https_count;
+        }
+        slot++;
+    }
+    for(unsigned i=0;i<extra_total;i++) {
+        struct extra *x=&extras[i];
+        if(slot>=FF_TEMPLATE_SLOTS) {
+            snprintf(error,cap,"at most %u port-matched TCP templates (https_* and [[tcp.extra]])",(unsigned)FF_TCP_EXTRA_MAX);
+            return -1;
+        }
+        if(*x->hostname && *x->file) {snprintf(error,cap,"[[tcp.extra]]: hostname and payload_file are mutually exclusive");return -1;}
+        if(!*x->hostname && !*x->file) {snprintf(error,cap,"[[tcp.extra]]: needs a hostname or a payload_file");return -1;}
+        if(*x->file && *x->payload) {snprintf(error,cap,"[[tcp.extra]]: payload cannot be combined with payload_file");return -1;}
+        if(*x->payload && strcmp(x->payload,"tls") && strcmp(x->payload,"http")) {
+            snprintf(error,cap,"[[tcp.extra]]: payload must be \"tls\" or \"http\"");return -1;
+        }
+        /* The port list is the only way this slot can be selected, so requiring it
+         * keeps a template from being configured that can never be reached. */
+        if(!x->ports_given) {snprintf(error,cap,"[[tcp.extra]]: ports is required (it selects the template)");return -1;}
+        strcpy(o->extra[slot].hostname,x->hostname);
+        strcpy(o->extra[slot].file,x->file);
+        o->extra_kind[slot]=!strcmp(x->payload,"http")?FF_SLOT_HTTP:FF_SLOT_TLS;
+        for(unsigned k=0;k<x->port_count;k++) o->kernel.ports[slot][k]=x->ports[k];
+        o->kernel.port_count[slot]=x->port_count;
+        slot++;
+    }
+    o->extra_count=slot-1;
+    /* The datapath takes the first slot whose list contains either port, so a port
+     * claimed twice would leave one of the two slots unreachable. */
+    for(unsigned a=1;a<=o->extra_count;a++)
+        for(unsigned b=a+1;b<=o->extra_count;b++)
+            for(unsigned i=0;i<o->kernel.port_count[a];i++)
+                for(unsigned j=0;j<o->kernel.port_count[b];j++)
+                    if(o->kernel.ports[a][i]==o->kernel.ports[b][j]) {
+                        snprintf(error,cap,"port %u is claimed by two templates",o->kernel.ports[a][i]);
+                        return -1;
+                    }
     for(unsigned i=0;i<count;i++) {
         if((!strcmp(o->tcp_payload,"custom") && !strcmp(seen[i],"tcp.0.hostname")) ||
            (!strcmp(o->udp_payload,"custom") && !strcmp(seen[i],"udp.0.sip_uri")) ||

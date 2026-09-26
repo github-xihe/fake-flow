@@ -20,8 +20,17 @@ var fields = {
 	runtime_tcp_entries: ['number', 8192, 64, 1048576], runtime_udp_entries: ['number', 8192, 64, 1048576],
 	runtime_lease_seconds: ['number', 10, 4, 60]
 };
+// One [[tcp.extra]] entry: another port-matched TCP template. `payload` is the kind
+// generated from `hostname` (tls = ClientHello with SNI, http = GET with Host), and
+// `payload_file` wins over it, exactly as the parser treats an explicit file.
+var extra_fields = {
+	hostname: ['string', ''], payload: ['enum', 'tls', ['tls', 'http']],
+	payload_file: ['string', ''], ports: ['ports', '']
+};
+// FF_TCP_EXTRA_MAX: port-matched templates in total, https_* included.
+var extra_max = 3;
 function defaults() {
-	var values = {};
+	var values = { tcp_extras: [] };
 	Object.keys(fields).forEach(function(k) {
 		values[k] = fields[k][0] === 'bool' ? (fields[k][1] ? '1' : '0') : String(fields[k][1]);
 	});
@@ -32,8 +41,52 @@ function quote(value) {
 		throw new Error('文本不能包含双引号、反斜杠或换行。');
 	return '"' + value + '"';
 }
+function extras_of(settings) {
+	return Array.isArray(settings.tcp_extras) ? settings.tcp_extras : [];
+}
+// '443, 8443' -> [443, 8443]. The port list is the only thing that selects a
+// template, so an empty list is refused instead of quietly matching nothing.
+function port_list(value, what) {
+	var list = String(value === undefined || value === null ? '' : value)
+		.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length; });
+	if (!list.length) throw new Error(what + '：端口列表不能为空。');
+	if (list.length > 4) throw new Error(what + '：端口列表最多 4 个端口。');
+	if (list.some(function(s) { return !/^\d+$/.test(s) || +s < 1 || +s > 65535; }))
+		throw new Error(what + '：端口值超出范围。');
+	var nums = list.map(Number);
+	if (new Set(nums).size !== nums.length) throw new Error(what + '：端口重复。');
+	return nums;
+}
+function check_extras(settings) {
+	var list = extras_of(settings), owner = {};
+	var used = (settings.tcp_https_hostname || settings.tcp_https_payload_file) ? 1 : 0;
+	if (used + list.length > extra_max)
+		throw new Error('端口匹配的 TCP 模板最多 ' + extra_max + ' 个（https_* 与 [[tcp.extra]] 合计）。');
+	if (used && settings.tcp_https_ports)
+		port_list(settings.tcp_https_ports, 'HTTPS 模板').forEach(function(p) { owner[p] = 'HTTPS 模板'; });
+	else if (used)
+		/* The parser defaults the port-matched template to 443 when the list is
+		 * empty, so an entry claiming 443 collides with it. */
+		owner[443] = 'HTTPS 模板';
+	list.forEach(function(entry, index) {
+		var what = '第 ' + (index + 1) + ' 个 [[tcp.extra]]';
+		if (entry.hostname && entry.payload_file)
+			throw new Error(what + '：伪装域名与载荷文件只能填其一。');
+		if (!entry.hostname && !entry.payload_file)
+			throw new Error(what + '：需要伪装域名或载荷文件。');
+		if (['tls', 'http'].indexOf(entry.payload) < 0)
+			throw new Error(what + '：生成类型无效。');
+		// The datapath takes the first slot whose list contains the port, so a port
+		// claimed twice would leave one of the templates unreachable.
+		port_list(entry.ports, what).forEach(function(p) {
+			if (owner[p]) throw new Error('端口 ' + p + ' 被 ' + owner[p] + ' 与 ' + what + ' 同时占用。');
+			owner[p] = what;
+		});
+	});
+	return list;
+}
 function parse(text) {
-	var settings = defaults(), interfaces = [], section = '', seen = {}, sections = {}, version = false;
+	var settings = defaults(), interfaces = [], extras = [], section = '', seen = {}, sections = {}, version = false;
 	text.split(/\r?\n/).forEach(function(raw, index) {
 		var quoted = false, line = '';
 		for (var i = 0; i < raw.length; i++) {
@@ -47,6 +100,12 @@ function parse(text) {
 		if (line === '[[interfaces]]') {
 			section = 'interfaces'; interfaces.push({ name: '', mode: 'ethernet' }); return;
 		}
+		if (line === '[[tcp.extra]]') {
+			if (extras.length >= extra_max) fail();
+			section = 'tcp.extra';
+			extras.push({ hostname: '', payload: 'tls', payload_file: '', ports: '' });
+			return;
+		}
 		if (/^\[(tcp|udp|injection|runtime)\]$/.test(line)) {
 			section = line.slice(1, -1);
 			if (sections[section]) fail();
@@ -54,11 +113,14 @@ function parse(text) {
 		}
 		var match = line.match(/^([a-z_]+)\s*=\s*(.+)$/);
 		if (!match) fail();
-		var key = match[1], value = match[2], id = section + '.' + interfaces.length + '.' + key;
+		var key = match[1], value = match[2];
+		var repeat = section === 'interfaces' ? interfaces.length : section === 'tcp.extra' ? extras.length : 0;
+		var id = section + '.' + repeat + '.' + key;
 		if (seen[id]) fail();
 		seen[id] = true;
 		if (!section && key === 'version' && value === '1') { version = true; return; }
-		var spec = section === 'interfaces' && (key === 'name' || key === 'mode') ? ['string'] : fields[section + '_' + key];
+		var spec = section === 'interfaces' && (key === 'name' || key === 'mode') ? ['string'] :
+			section === 'tcp.extra' ? extra_fields[key] : fields[section + '_' + key];
 		if (!spec) fail();
 		var parsed;
 		if (spec[0] === 'bool') {
@@ -87,9 +149,11 @@ function parse(text) {
 			if (spec[0] === 'enum' && spec[2].indexOf(parsed) < 0) fail();
 		}
 		if (section === 'interfaces') interfaces[interfaces.length - 1][key] = parsed;
+		else if (section === 'tcp.extra') extras[extras.length - 1][key] = parsed;
 		else settings[section + '_' + key] = parsed;
 	});
 	if (!version || !interfaces.length) throw new Error('需要 version = 1 和至少一个接口。');
+	settings.tcp_extras = extras;
 	// Validate names and combinations before allowing a form rewrite.
 	serialize(settings, interfaces);
 	return { settings: settings, interface: interfaces };
@@ -107,6 +171,7 @@ function serialize(settings, interfaces) {
 	if (+settings.injection_burst < +settings.injection_repeat) throw new Error('突发额度不能小于每批副本数。');
 	if (settings.tcp_https_hostname && settings.tcp_https_payload_file)
 		throw new Error('HTTPS 模板只能填伪装域名或载荷文件其中之一。');
+	var extras = check_extras(settings);
 	['tcp', 'udp', 'injection', 'runtime'].forEach(function(section) {
 		lines.push('', '[' + section + ']');
 		Object.keys(fields).forEach(function(id) {
@@ -129,22 +194,28 @@ function serialize(settings, interfaces) {
 				if (['active', 'passive', 'both'].indexOf(value) < 0) throw new Error('TCP 方向无效。');
 				value = value === 'both' ? '["active", "passive"]' : '[' + quote(value) + ']';
 			} else if (spec[0] === 'ports') {
-				var list = String(value === undefined || value === null ? '' : value)
-					.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length; });
-				if (!list.length) return;		/* omitted: the parser defaults to 443 */
-				if (list.length > 4) throw new Error(id + ': 端口列表最多 4 个端口。');
-				if (list.some(function(s) { return !/^\d+$/.test(s) || +s < 1 || +s > 65535; }))
-					throw new Error(id + ': 端口值超出范围。');
-				var nums = list.map(Number);
-				if (new Set(nums).size !== nums.length) throw new Error(id + ': 端口重复。');
-				value = '[' + nums.join(', ') + ']';
+				if (!String(value === undefined || value === null ? '' : value).trim()) return;	/* omitted: 443 */
+				value = '[' + port_list(value, id).join(', ') + ']';
 			} else {
 				if (spec[0] === 'enum' && spec[2].indexOf(value) < 0) throw new Error(id + ': 选项无效。');
 				value = quote(value);
 			}
 			lines.push(key + ' = ' + value);
 		});
+		/* The array of tables belongs to [tcp], so it is emitted before the next
+		 * section header: a key after [[tcp.extra]] would land in the last entry. */
+		if (section !== 'tcp') return;
+		extras.forEach(function(entry) {
+			lines.push('', '[[tcp.extra]]');
+			if (entry.payload_file) lines.push('payload_file = ' + quote(entry.payload_file));
+			else {
+				lines.push('hostname = ' + quote(entry.hostname));
+				lines.push('payload = ' + quote(entry.payload === 'http' ? 'http' : 'tls'));
+			}
+			lines.push('ports = [' + port_list(entry.ports, '[[tcp.extra]]').join(', ') + ']');
+		});
 	});
 	return lines.join('\n') + '\n';
 }
-return baseclass.extend({ fields: fields, defaults: defaults, parse: parse, serialize: serialize });
+return baseclass.extend({ fields: fields, extra_fields: extra_fields, extra_max: extra_max,
+	defaults: defaults, parse: parse, serialize: serialize });

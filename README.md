@@ -56,6 +56,7 @@ sudo build/fakeflow stop
 | `tcp.payload` | `http` | `http` / `tls` / `custom` |
 | `tcp.https_hostname` / `tcp.https_payload_file` | 空 | 端口匹配的第二份 TCP 模板；两者只能填其一，都不填则不存在 |
 | `tcp.https_ports` | `[443]` | 逗号分隔、最多 4 个；命中这些端口的连接改用第二份模板 |
+| `[[tcp.extra]]` | 无 | 数组表，每段一份按端口选择的额外 TCP 模板；`ports` 必填，与 `https_*` 合计最多 3 份 |
 | `udp.trigger` | `egress` | `both` 仅对已有出站记录的入站流注入 |
 | `udp.initial_packets` | `5` | 双向计数；不是 conntrack 包计数 |
 | `injection.ttl` / `repeat` | `3` / `2` | 默认低 TTL 和每批副本数 |
@@ -83,7 +84,27 @@ https_hostname = "www.speedtest.cn"          # 443 上发 TLS ClientHello，SNI 
 # https_payload_file = "/etc/fakeflow/tls.bin"  # 或改用二进制；与 https_hostname 只能填其一
 ```
 
-选槽只看连接两端端口是否落在 `https_ports` 里（出站与入站方向都覆盖）；客户端临时端口恰好等于该值的连接也会走第二份模板，后果只是换了一份低 TTL 假包。两份模板各自预渲染，`validate` 会分别报告字节数。
+选槽只看连接两端端口是否落在某份模板的端口表里（出站与入站方向都覆盖），按槽位顺序取第一个命中；客户端临时端口恰好等于某个配置值的连接也会走那份模板，后果只是换了一份低 TTL 假包。未命中任何端口表的连接用 `[tcp]` 主模板。各份模板各自预渲染，`validate` 会分别报告字节数。
+
+三份以上：`[[tcp.extra]]` 每段一份，按出现顺序占用槽位，`https_*` 永远占第一份：
+
+```toml
+[tcp]
+payload = "http"
+hostname = "speed.gx.chinamobile.com"
+https_hostname = "www.speedtest.cn"          # 槽位 1：443 上发 TLS ClientHello
+
+[[tcp.extra]]                                 # 槽位 2
+hostname = "cdn.example.net"                  # 8080 上发 TLS ClientHello，SNI 取此域名
+ports = [8080]
+
+[[tcp.extra]]                                 # 槽位 3
+hostname = "plain.example.net"
+payload = "http"                              # 改发 HTTP 请求，Host 取此域名
+ports = [8000, 8001]
+```
+
+没有 `https_*` 时，第一段 `[[tcp.extra]]` 直接占槽位 1。`ports` 必填、最多 4 个，且不能与其他模板重复——端口重复会让其中一份永远选不中，因此直接按配置错误拒绝；`hostname` 与 `payload_file` 只能填其一；`payload` 只决定由 `hostname` 生成的载荷（默认 `tls`）。
 
 TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、TCP 分片、IPv4 选项、未支持的 IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。IPv4 UDP 的首片（offset=0、MF=1、含完整 UDP 头）和 `IPv6 → Fragment → UDP` 首片可触发注入，无需重组；后续分片不触发、不占用初期窗口。IPv6 atomic fragment 也按完整 UDP 数据报处理。假包重算校验和、移除分片标记/Fragment 头，真实各片保持不变；叠加其他 IPv6 扩展头仍跳过。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
 
@@ -100,10 +121,11 @@ OpenWrt 24.10 可安装独立的 **luci-app-fakeflow**，在 **服务 → FakeFl
 128 KiB），**不再进入系统日志**；页面底部的「运行日志」一栏从该文件读取，每 5 秒
 自动刷新，也可手动刷新。启动失败仍能从 procd 自己的实例消息在系统日志看到。
 
-每行自带 `YYYY-MM-DD HH:MM:SS 级别` 前缀（ERROR / WARN / INFO / DEBUG），界面可按
-级别过滤，默认隐藏 DEBUG（libbpf 的 map 与重定位细节都在这一级）。init 脚本用
-`--log-level info` 启动守护进程；排查加载失败时把它改成 `debug` 再重启，即可拿到
-内核 verifier 明细——那部分日志同样是 DEBUG。
+每行自带 `YYYY-MM-DD HH:MM:SS 级别` 前缀（ERROR / WARN / INFO / DEBUG）。**过滤只在读侧**：
+文件按实际发生的一切写入（默认 debug，不设上限），「运行日志」一栏默认显示「信息及以上」，
+并可按级别切换。这样既能随时回看 libbpf 的 map 与重定位细节，也能拿到内核 verifier 明细——
+排查加载失败所需的正是这一级。init 脚本不再传 `--log-level`；若确实要限制写入量，可手动加上
+`--log-level info` 之类的上限。
 安装、保存与应用的行为见 [LuCI 安装说明](packaging/luci/INSTALL.md)。
 GitHub Actions 的 `OpenWrt LuCI package` 工作流提供 IPK，并测试真实 OpenWrt LuCI 页面。
 

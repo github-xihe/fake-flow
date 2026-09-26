@@ -297,6 +297,33 @@ def inside():
             packets=capture(frame(TCP(sport=443,dport=26443,flags="SA",seq=4,ack=2),True),True)
             assert len(packets)==2
             assert b"Host: www.example.com" in bytes(packets[0][TCP].payload)
+            # [[tcp.extra]]: every entry is its own port-matched template, so the
+            # primary Host, the https SNI, a second SNI and an HTTP Host on two
+            # ports all coexist in one instance.
+            extras=(text.replace('hostname = "www.example.com"',
+                    'hostname = "www.example.com"\nhttps_hostname = "tls.example"')
+                + '\n[[tcp.extra]]\nhostname = "cdn.example"\nports = [8080]\n'
+                + '\n[[tcp.extra]]\nhostname = "plain.example"\npayload = "http"\nports = [8000, 8001]\n')
+            config.write_text(extras)
+            assert command("reload").stdout.startswith("OK")
+            for port, marker, absent, tls in (
+                    (80, b"Host: www.example.com", b"plain.example", False),
+                    (443, b"tls.example", b"Host: www.example.com", True),
+                    (8080, b"cdn.example", b"plain.example", True),
+                    (8000, b"Host: plain.example", b"cdn.example", False),
+                    (8001, b"Host: plain.example", b"cdn.example", False)):
+                sport=27500+port%100
+                capture(frame(TCP(sport=sport,dport=port,flags="S",seq=1)))
+                packets=capture(frame(TCP(sport=port,dport=sport,flags="SA",seq=4,ack=2),True),True)
+                assert len(packets)==2, (port, command("stats").stdout)
+                for p in packets:
+                    verify(p)
+                    payload=bytes(p[TCP].payload)
+                    assert marker in payload, (port, payload[:64])
+                    assert absent not in payload, (port, payload[:64])
+                    if tls: assert payload[0]==22 and payload[1]==3, (port, payload[:8])
+            config.write_text(text)
+            assert command("reload").stdout.startswith("OK")
             # Full-sized binary templates also exercise the bounded checksum chunks.
             binary=bytes(range(256))*4+bytes(range(176))
             payload_file=tmp/"payload.bin";payload_file.write_bytes(binary)

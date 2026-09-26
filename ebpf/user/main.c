@@ -37,21 +37,27 @@ int main(int argc,char **argv) {
         }
         else goto usage;
     }
-    /* Default DEBUG keeps CLI and test runs as verbose as before; the packaged
-     * init script asks for INFO, which is what keeps routine libbpf detail out
-     * of the log file. */
+    /* Default DEBUG writes every level, for the daemon as well: filtering is done
+     * where the log is read (the LuCI view defaults to 信息及以上), so a verifier
+     * dump from an earlier start is still in the file when a load failure is
+     * investigated. --log-level stays as a manual throttle for a chatty file. */
     if(!strcmp(argv[1],"run")) return ff_run(config,object,runtime,logfile,log_level);
     if(!strcmp(argv[1],"check") || !strcmp(argv[1],"validate")) {
         struct ff_options o;char error[512];
         if(ff_config_read(config,&o,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
         if(!strcmp(argv[1],"check")) return ff_check(&o);
-        /* The port-matched template is reported only when the configuration
-         * defines one, so the existing line stays byte-identical otherwise. */
-        if(o.tcp_https_template.len)
+        /* The port-matched templates are reported only when the configuration
+         * defines them, so the existing line stays byte-identical otherwise; each
+         * additional slot gets its own line. */
+        unsigned top=0;
+        for(unsigned s=1;s<FF_TEMPLATE_SLOTS;s++) if(o.extra[s].tpl.len) top=s;
+        if(top)
             printf("Configuration valid; TCP template %u B, TCP port-matched template %u B, UDP template %u B\n",
-                o.tcp_template.len,o.tcp_https_template.len,o.udp_template.len);
+                o.tcp_template.len,o.extra[1].tpl.len,o.udp_template.len);
         else
             printf("Configuration valid; TCP template %u B, UDP template %u B\n",o.tcp_template.len,o.udp_template.len);
+        for(unsigned s=2;s<=top;s++)
+            printf("TCP extra template slot %u: %u B\n",s,o.extra[s].tpl.len);
         return 0;
     }
     if(!strcmp(argv[1],"status") || !strcmp(argv[1],"stats") ||

@@ -102,6 +102,26 @@ return view.extend({
 			decode(data.devices, []).forEach(function(d) { if (d.ifname) o.value(d.ifname); });
 			o = interfaces.option(form.ListValue, 'mode', '模式'); o.rmempty = false; o.default = 'pppoe';
 			o.value('pppoe', '物理 PPPoE'); o.value('ethernet', '普通以太网'); o.value('l3', 'L3 / 逻辑 PPP 接口');
+			/* One [[tcp.extra]] table each: another port-matched template. Its port
+			 * list is required, so an entry that is never reachable cannot be saved;
+			 * the optional fields accept an empty value and the combination rules are
+			 * reported by config.js with a per-entry message. */
+			var extras = m.section(form.TableSection, 'extra', '端口匹配的 TCP 模板（[[tcp.extra]]）',
+				'可选，最多 ' + config.extra_max + ' 个（与上面的 HTTPS 模板合计）。命中自己端口列表的连接改发这份假载荷，其余端口仍用主 TCP 模板；端口不能与其他模板重复。');
+			extras.anonymous = true; extras.addremove = true; extras.sortable = true;
+			o = extras.option(form.Value, 'hostname', '伪装域名',
+				'TLS 时作为 SNI，HTTP 时作为 Host。可打印 ASCII、不含空格；与载荷文件只能填其一。');
+			o.rmempty = true;
+			o.validate = function(section, v) { return !v || /^[!-~]+$/.test(v) || '域名只能是可打印 ASCII，且不含空格。'; };
+			o = extras.option(form.ListValue, 'payload', '生成类型', '仅有伪装域名时使用；填了载荷文件则忽略。');
+			o.value('tls', 'TLS ClientHello'); o.value('http', 'HTTP 请求');
+			o.default = 'tls'; o.rmempty = true;
+			o = extras.option(form.Value, 'payload_file', '载荷文件路径',
+				'路由器上已有的二进制文件，1–1200 字节；填了就忽略上面的伪装域名与生成类型。');
+			o.rmempty = true;
+			o = extras.option(form.Value, 'ports', '端口',
+				'必填，逗号分隔，最多 4 个，例如 8080 或 8000, 8001；它是选择这个模板的唯一依据。');
+			o.rmempty = true;
 		}
 		// Preview/validation also parse the JSONMap. Always read current inputs,
 		// including values changed back to their initial value after a preview.
@@ -195,11 +215,19 @@ return view.extend({
 			+ all.length + ' 行，显示 ' + shown.length + ' 行'
 			+ (all.length > shown.length ? '，已按级别隐藏 ' + (all.length - shown.length) + ' 行。' : '。');
 	},
+	container: function() { return this.map.data.sections('json', 'interface'); },
+	/* The array of tables lives in its own JSONMap section, like the
+	 * interfaces, and serialize() expects it on the settings object. */
+	settingsWithExtras: function() {
+		var settings = this.map.data.get('json', 'settings');
+		if (!this.rawMode) settings.tcp_extras = this.map.data.sections('json', 'extra');
+		return settings;
+	},
 	candidate: function() {
 		this.map.checkDepends();
 		return this.map.parse().then(function() {
-			var settings = this.map.data.get('json', 'settings');
-			return { config: this.rawMode ? settings.raw : config.serialize(settings, this.map.data.sections('json', 'interface')),
+			var settings = this.settingsWithExtras();
+			return { config: this.rawMode ? settings.raw : config.serialize(settings, this.container()),
 				enabled: settings.service_enabled === '1', autostart: settings.autostart === '1' };
 		}.bind(this));
 	},

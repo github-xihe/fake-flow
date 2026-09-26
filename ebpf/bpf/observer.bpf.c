@@ -113,16 +113,22 @@ static __always_inline int observe(struct __sk_buff *skb,int in) {
     if(parse(skb,iface,in,&p)) return TC_ACT_UNSPEC;
     if(!remote_allowed(&p,c)) {stat(FF_SKIP_PRIVATE);return TC_ACT_UNSPEC;}
     /* Which template slot applies. A connection whose local or remote port is in
-     * the configured list uses the second TCP template, so an HTTP Host and a
-     * TLS SNI can coexist in one instance; matching either end also covers the
-     * direction we did not initiate. UDP always uses slot 0. */
+     * one of the configured lists uses that port-matched template, so several
+     * Host/SNI/payload templates can coexist in one instance; matching either end
+     * also covers the direction we did not initiate. The first matching slot wins
+     * and ports are unique across slots (the parser rejects an overlap), so the
+     * order is well defined. UDP always uses slot 0. */
     __u32 slot=0;
     if(p.key.protocol==6) {
+        /* Flat and unrolled: every index into the port table is a compile-time
+         * constant, so the verifier needs no dynamic array bound, the datapath
+         * stays branch-light and the first matching slot wins. */
         #pragma unroll
-        for(int i=0;i<FF_HTTPS_PORTS_MAX;i++) {
-            if(i>=(int)c->port_count) break;
-            if(p.key.remote_port==(__u16)c->ports[i] ||
-               p.key.local_port==(__u16)c->ports[i]) {slot=1;break;}
+        for(int k=0;k<FF_TEMPLATE_SLOTS*FF_HTTPS_PORTS_MAX;k++) {
+            __u32 s=(__u32)(k/FF_HTTPS_PORTS_MAX), i=(__u32)(k%FF_HTTPS_PORTS_MAX);
+            if(!slot && s && i<c->port_count[s] &&
+               (p.key.remote_port==(__u16)c->ports[s][i] ||
+                p.key.local_port==(__u16)c->ports[s][i])) slot=s;
         }
     }
     __u32 plan=(p.key.protocol==6?0:FF_TEMPLATE_SLOTS)+slot;

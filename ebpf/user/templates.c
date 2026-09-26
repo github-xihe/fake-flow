@@ -50,6 +50,35 @@ static int tls(struct ff_template *t,const char *hostname) {
     put16(p+3,pos-5); p[6]=(pos-9)>>16;p[7]=(pos-9)>>8;p[8]=pos-9;
     t->len=pos;return 0;
 }
+/* HTTP request template. Shared by the primary slot and by any extra slot whose
+ * payload is `http`, so a `Host:` template can carry a port that HTTPS does not
+ * use. */
+static int http(struct ff_template *t,const char *hostname) {
+    memset(t,0,sizeof(*t));
+    int n=snprintf((char*)t->data,FF_PAYLOAD_MAX,
+        "GET / HTTP/1.1\r\nHost: %s\r\n"
+        "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/124.0.0.0 Safari/537.36\r\n"
+        "Accept: */*\r\nConnection: close\r\n\r\n",hostname);
+    if(n<0 || n>=FF_PAYLOAD_MAX) return -1;
+    t->len=n;return 0;
+}
+/* Render one port-matched slot. A payload file wins over the generated kinds, so
+ * a slot with both is rejected during parsing instead of here. Returns -1 for an
+ * unreadable or oversized payload file and -2 for anything else, which is the
+ * distinction the caller turns into its two error messages. */
+static int slot_template(struct ff_tcp_slot *s,unsigned kind,struct ff_plan *plan) {
+    if(*s->file) {
+        if(custom(s->file,&s->tpl)) return -1;
+        return 0;
+    }
+    if(!safe_text(s->hostname)) return -2;
+    if(kind==FF_SLOT_HTTP) return http(&s->tpl,s->hostname)?-2:0;
+    if(tls(&s->tpl,s->hostname)) return -2;
+    plan->kind=FF_VARIANT_RENDER;plan->variants=FF_TEMPLATE_VARIANTS;
+    return 0;
+}
 /* Record where the randomised identity fields landed, so PATCH variants can be
  * produced without re-parsing the datagram. Requiring the terminator and
  * hex-only digits rejects a field that shifted or was truncated, which would
@@ -77,47 +106,47 @@ static int locate(struct ff_plan *plan,const struct ff_template *t) {
 int ff_templates(struct ff_options *o,char *error,size_t cap) {
     int n=0;
     struct ff_plan *tcp0=&o->plan[FF_TEMPLATE_PLAN(0,0)];
-    struct ff_plan *tcp1=&o->plan[FF_TEMPLATE_PLAN(0,1)];
     struct ff_plan *udp0=&o->plan[FF_TEMPLATE_PLAN(1,0)];
     memset(&o->tcp_template,0,sizeof(o->tcp_template));
-    memset(&o->tcp_https_template,0,sizeof(o->tcp_https_template));
     memset(&o->udp_template,0,sizeof(o->udp_template));
     memset(o->plan,0,sizeof(o->plan));
+    /* o->extra is deliberately not cleared here: the parser filled the slots'
+     * hostname/file/kind and this function only renders them. Callers must pass a
+     * zeroed struct (ff_config_read does, which is also what keeps the slots the
+     * configuration did not define empty and therefore unpublished). */
     /* A template without randomised bytes is published once; the others get the
      * full pre-rendered set the observer picks from. */
-    tcp0->kind=FF_VARIANT_SAME;tcp0->variants=1;
-    tcp1->kind=FF_VARIANT_SAME;tcp1->variants=1;
-    udp0->kind=FF_VARIANT_SAME;udp0->variants=1;
+    for(unsigned p=0;p<FF_TEMPLATE_PLAN_COUNT;p++) {
+        o->plan[p].kind=FF_VARIANT_SAME;o->plan[p].variants=1;
+    }
 
     if(!strcmp(o->tcp_payload,"custom")) {
         if(custom(o->tcp_file,&o->tcp_template)) goto bad_file;
     } else {
         if(*o->tcp_file || !safe_text(o->hostname)) goto bad;
         if(!strcmp(o->tcp_payload,"http")) {
-            n=snprintf((char*)o->tcp_template.data,FF_PAYLOAD_MAX,
-                "GET / HTTP/1.1\r\nHost: %s\r\n"
-                "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36\r\n"
-                "Accept: */*\r\nConnection: close\r\n\r\n",o->hostname);
-            if(n<0 || n>=FF_PAYLOAD_MAX) goto bad;
-            o->tcp_template.len=n;
+            if(http(&o->tcp_template,o->hostname)) goto bad;
         } else if(!strcmp(o->tcp_payload,"tls")) {
             if(tls(&o->tcp_template,o->hostname)) goto bad;
             tcp0->kind=FF_VARIANT_RENDER;tcp0->variants=FF_TEMPLATE_VARIANTS;
         } else goto bad;
     }
 
-    /* Second TCP slot. It stays absent unless https_hostname or https_file is
-     * set, so a configuration that does not use it behaves exactly as before
-     * (including sending the primary template to every port). */
-    if(*o->https_file && *o->https_hostname) goto bad;
-    if(*o->https_file) {
-        if(custom(o->https_file,&o->tcp_https_template)) goto bad_file;
-    } else if(*o->https_hostname) {
-        if(!safe_text(o->https_hostname)) goto bad;
-        if(tls(&o->tcp_https_template,o->https_hostname)) goto bad;
-        tcp1->kind=FF_VARIANT_RENDER;tcp1->variants=FF_TEMPLATE_VARIANTS;
+    /* Slot 0 mirrors the primary template, so the publish loop and the variant
+     * renderer treat every slot the same way instead of special-casing the
+     * primary. */
+    o->extra[0].tpl=o->tcp_template;
+    strcpy(o->extra[0].hostname,o->hostname);
+    strcpy(o->extra[0].file,o->tcp_file);
+    /* Port-matched slots, in configuration order: the https_* compatibility keys
+     * take slot 1, then each [[tcp.extra]] entry the next free slot. The parser
+     * filled their hostname/file/kind and bounds extra_count to the slots that
+     * exist, so a slot the configuration did not define is never rendered (and
+     * never published, which is what keeps its connections on the primary). */
+    for(unsigned s=1;s<=o->extra_count && s<FF_TEMPLATE_SLOTS;s++) {
+        int rc=slot_template(&o->extra[s],o->extra_kind[s],&o->plan[FF_TEMPLATE_PLAN(0,s)]);
+        if(rc==-1) goto bad_file;
+        if(rc) goto bad;
     }
 
     if(!strcmp(o->udp_payload,"custom")) {
@@ -161,9 +190,11 @@ int ff_variants(const struct ff_options *o,struct ff_template out[][FF_TEMPLATE_
     for(unsigned plan=0;plan<FF_TEMPLATE_PLAN_COUNT;plan++) {
         const struct ff_plan *p=&o->plan[plan];
         const struct ff_template *base;
-        const char *host=o->hostname;
-        if(plan==FF_TEMPLATE_PLAN(0,0)) base=&o->tcp_template;
-        else if(plan==FF_TEMPLATE_PLAN(0,1)) {base=&o->tcp_https_template;host=o->https_hostname;}
+        const char *host="";
+        /* Plans 0..FF_TEMPLATE_SLOTS-1 are the TCP slots and slot 0 mirrors the
+         * primary template; UDP publishes only its slot 0. */
+        unsigned slot=plan%FF_TEMPLATE_SLOTS;
+        if(plan<FF_TEMPLATE_SLOTS) {base=&o->extra[slot].tpl;host=o->extra[slot].hostname;}
         else if(plan==FF_TEMPLATE_PLAN(1,0)) base=&o->udp_template;
         else continue;
         unsigned count=p->variants?p->variants:1;

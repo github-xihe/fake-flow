@@ -171,8 +171,10 @@ static int publish(struct runtime *r,struct ff_options *o) {
     int fd=map(r,"templates");
     for(unsigned plan=0;plan<FF_TEMPLATE_PLAN_COUNT;plan++) {
         const struct ff_template *src;
-        if(plan==FF_TEMPLATE_PLAN(0,0)) src=&o->tcp_template;
-        else if(plan==FF_TEMPLATE_PLAN(0,1)) src=&o->tcp_https_template;
+        /* The TCP plans are the slots themselves and slot 0 mirrors the primary
+         * template, so a slot the configuration did not define has len 0 and is
+         * skipped below; UDP publishes only its slot 0. */
+        if(plan<FF_TEMPLATE_SLOTS) src=&o->extra[plan].tpl;
         else if(plan==FF_TEMPLATE_PLAN(1,0)) src=&o->udp_template;
         else continue;
         /* An absent plan is never published and its variant count is zeroed, so

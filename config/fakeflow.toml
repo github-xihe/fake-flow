@@ -17,6 +17,19 @@ hostname = "www.example.com"
 tfo = "strip-syn"
 max_batches = 3
 
+# 端口匹配的额外 TCP 模板（数组表），每个 [[tcp.extra]] 一份，按出现顺序占用槽位。
+# ports 必填（它是选择该模板的唯一依据，且不能与其他模板重复）；hostname 与
+# payload_file 只能填其一；payload 只影响由 hostname 生成的载荷（默认 tls）。
+# 与 https_* 合计最多 3 份。下面两段是示例，默认注释掉。
+# [[tcp.extra]]
+# hostname = "cdn.example.net"
+# ports = [8080]
+#
+# [[tcp.extra]]
+# hostname = "plain.example.net"
+# payload = "http"
+# ports = [8000, 8001]
+
 [udp]
 enabled = true
 trigger = "egress"

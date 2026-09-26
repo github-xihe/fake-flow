@@ -14,10 +14,12 @@ start_service() {
     # procd_set_param stdout/stderr: those flags are what send it to syslog.
     # A hard failure is still visible in syslog through procd's own instance
     # messages, and the daemon's own diagnostics are shown in LuCI → 日志.
-    # --log-level info keeps routine libbpf detail (map/relocation, DEBUG) out of
-    # the file; use debug when reproducing a load failure, because the verifier
-    # dump is DEBUG as well.
-    procd_set_param command /usr/sbin/fakeflow run --config /etc/fakeflow.toml --log-file /var/log/fakeflow.log --log-level info
+    # No --log-level here: the file receives every level and filtering happens
+    # where the log is read (LuCI → 日志 defaults to 信息及以上 and hides DEBUG
+    # rows on demand). Leaving the write side unfiltered keeps a verifier dump
+    # from an earlier start available when a load failure is investigated;
+    # --log-level is still there as a manual throttle for a chatty file.
+    procd_set_param command /usr/sbin/fakeflow run --config /etc/fakeflow.toml --log-file /var/log/fakeflow.log
     procd_set_param respawn 3600 5 5
     procd_set_param file /etc/fakeflow.toml
     procd_set_param limits memlock="unlimited"

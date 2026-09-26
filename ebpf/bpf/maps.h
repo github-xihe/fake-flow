@@ -35,10 +35,11 @@ MAP(configs,BPF_MAP_TYPE_HASH,__u32,struct ff_config,16);
 MAP(leases,BPF_MAP_TYPE_ARRAY,__u32,struct ff_lease,1);
 MAP(interfaces,BPF_MAP_TYPE_HASH,__u32,struct ff_interface,FF_INTERFACES);
 /* Holds plan * variant keys per generation. A generation publishes at most
- * 3 plans * FF_TEMPLATE_VARIANTS = 96 entries, and publish() keeps the active
- * and the previous generation while inserting the next, so 3 * 96 = 288 are
- * live at the peak; 320 leaves headroom without a large preallocation. */
-MAP(templates,BPF_MAP_TYPE_HASH,__u32,struct ff_template,320);
+ * FF_TEMPLATE_PLAN_COUNT * FF_TEMPLATE_VARIANTS = 256 entries, and publish()
+ * keeps the active and the previous generation while inserting the next, so
+ * 3 * 256 = 768 are live at the peak; the capacity leaves headroom for the
+ * per-generation span without a large preallocation. */
+MAP(templates,BPF_MAP_TYPE_HASH,__u32,struct ff_template,768);
 MAP(tcp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 MAP(udp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 /* LRU maps cannot embed bpf_spin_lock. A stable key-derived array lock guards
