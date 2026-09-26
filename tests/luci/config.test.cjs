@@ -150,6 +150,21 @@ for (const bad of [
 assert.throws(() => config.parse(original.replace(ht, ht + '\nhttps_hostname = "h"') +
   '\n[[tcp.extra]]\nhostname = "a"\nports = [443]\n'));
 assert.throws(() => config.parse(original + entry.repeat(4)));
+// A JSONMap section renders the rows found under a model key of the same name:
+// `interface` comes from config.parse, so anything else must be assigned in the
+// view. Without it the table shows up empty and the next save drops the entries.
+{
+  const provided = Object.keys(config.parse(original));
+  let seen = 0;
+  for (const match of viewSource.matchAll(/m\.section\(form\.TableSection,\s*'([a-z_]+)'/g)) {
+    seen++;
+    const name = match[1];
+    if (provided.includes(name)) continue;
+    assert(new RegExp('model\\.' + name + '\\s*=').test(viewSource),
+      `JSONMap 段 ${name} 的行没有挂到 model.${name}，页面重载后会丢数据`);
+  }
+  assert(seen >= 2, '至少应有两个数组表段');
+}
 // Check syntax of the view and every shipped JSON file too.
 new Function(fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8'));
 for (const path of ['luci/menu.d', 'rpcd/acl.d'])

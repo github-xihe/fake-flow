@@ -33,7 +33,13 @@ return view.extend({
 		if (!data.ok) throw new Error(data.message || '无法读取 FakeFlow 配置。');
 		this.revision = data.revision;
 		var model, parseError;
-		try { model = config.parse(data.config); }
+		try {
+			model = config.parse(data.config);
+			/* A JSONMap section reads its rows from the model key that matches the
+			 * section name, exactly like `interface` above; without this the table
+			 * comes up empty and the next save would drop the entries. */
+			model.extra = model.settings.tcp_extras;
+		}
 		catch (e) { parseError = e.message; model = { settings: { raw: data.config } }; }
 		this.rawMode = !!parseError;
 		model.settings.service_enabled = data.enabled ? '1' : '0';
