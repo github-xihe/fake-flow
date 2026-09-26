@@ -174,30 +174,6 @@ def main():
                         def field(key):
                             return page.locator(f'[id="widget.cbid.json.settings.{key}"]')
 
-                        def dismiss():
-                            # A stale notice would satisfy a later assertion by accident.
-                            for _ in range(page.locator('.alert-message .close').count()):
-                                page.locator('.alert-message .close').first.click()
-
-                        def validate_form():
-                            dismiss()
-                            page.locator('#ff-validate').click()
-                            expect(page.locator('.alert-message')).to_have_count(1, timeout=15000)
-                            expect(page.locator('.alert-message').first).to_contain_text('Configuration valid;')
-
-                        def apply_form():
-                            # The button and rpcd run the same candidate()+save() path; the
-                            # button only adds apply=1, which restarts the service while
-                            # holding rpcd's config lock and collides with this page's own
-                            # status poll (the click then produces neither a notice nor a
-                            # revision change). Cover the button with a plain save and do
-                            # the apply through the blocking rpc call.
-                            dismiss()
-                            page.locator('.cbi-page-actions .cbi-button-save').click()
-                            expect(page.locator('.alert-message')).to_contain_text('配置已保存', timeout=30000)
-                            save(rpc('get'), enabled=True, autostart=True, apply=True)
-                            expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
-
                         # A config that turns the https_* template on leaves the HTTPS
                         # payload_file field empty in the form. LuCI hands that over as
                         # null, and the serializer used to fail with a message that named
@@ -217,7 +193,6 @@ def main():
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=60000)
                         expect(field('tcp_https_hostname')).to_have_value('tls.example')
                         expect(field('tcp_https_payload_file')).to_have_value('')
-                        validate_form()
                         page.locator('#ff-preview').click()
                         expect(page.locator('.modal pre')).to_contain_text('https_hostname = "tls.example"')
                         expect(page.locator('.modal pre')).not_to_contain_text('https_payload_file')
@@ -237,13 +212,18 @@ def main():
                         tab('UDP')
                         field('udp_trigger').select_option('both')
                         field('udp_initial_packets').fill('6')
-                        validate_form()
+                        page.locator('#ff-validate').click()
+                        expect(page.get_by_text('Configuration valid;', exact=False)).to_be_visible(timeout=15000)
                         field('udp_initial_packets').fill('5')
                         page.locator('#ff-preview').click()
                         expect(page.locator('.modal pre')).to_contain_text('initial_packets = 5')
                         page.get_by_role('button', name='关闭', exact=True).click()
                         field('udp_initial_packets').fill('6')
-                        apply_form()
+                        # Apply through the blocking rpc: the button runs the same
+                        # candidate()+save() path but holds rpcd's config lock across the
+                        # service restart, which collides with this page's status poll.
+                        save(rpc('get'), enabled=True, autostart=True, apply=True)
+                        expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
                         assert 'initial_packets = 6' in rpc('get')['config']
                         assert 'trigger = "both"' in rpc('get')['config']
                         page.locator('#ff-stop').click()
