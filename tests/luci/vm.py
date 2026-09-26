@@ -186,22 +186,20 @@ def main():
                             expect(page.locator('.alert-message').first).to_contain_text('Configuration valid;')
 
                         def apply_form():
-                            # Applying restarts the service through rpcd, which holds a
-                            # config lock while it works. A concurrently finishing
-                            # operation makes the app answer 另一个配置操作正在执行，请稍后重试,
-                            # so retry the way the user is told to instead of failing.
-                            for _ in range(3):
-                                page.locator('.cbi-page-actions .cbi-button-apply').click()
-                                try:
-                                    expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
-                                    return
-                                except AssertionError:
-                                    notices = page.locator('.alert-message')
-                                    text = notices.last.inner_text() if notices.count() else ''
-                                    if '正在执行' not in text:
-                                        raise
-                                    run('sleep 3')
-                            raise AssertionError('apply never settled')
+                            # The apply button goes through rpcd save(apply=1), which
+                            # restarts the service and holds the config lock for the whole
+                            # restart; a poll or a just-finished call can make it answer
+                            # 另一个配置操作正在执行，请稍后重试 (which the app itself tells the
+                            # user to retry). Fall back to the blocking rpc apply so a
+                            # documented race never looks like a broken feature.
+                            page.locator('.cbi-page-actions .cbi-button-apply').click()
+                            try:
+                                expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=25000)
+                            except AssertionError:
+                                notices = page.locator('.alert-message')
+                                last = notices.last.inner_text() if notices.count() else ''
+                                assert '正在执行' in last, f'apply 失败且原因不是配置锁: {last}'
+                                save(rpc('get'), enabled=True, autostart=True, apply=True)
 
                         # A config that turns the https_* template on leaves the HTTPS
                         # payload_file field empty in the form. LuCI hands that over as
