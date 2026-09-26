@@ -96,6 +96,9 @@ TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据�
 
 OpenWrt 24.10 可安装独立的 **luci-app-fakeflow**，在 **服务 → FakeFlow** 中修改
 现有 TOML 配置、设置自定义载荷路径、启停服务及查看统计和日志。
+守护进程自身的日志写在 `/var/log/fakeflow.log`（上限 256 KiB，超出时只保留最新
+128 KiB），**不再进入系统日志**；页面底部的「运行日志」一栏从该文件读取，每 5 秒
+自动刷新，也可手动刷新。启动失败仍能从 procd 自己的实例消息在系统日志看到。
 安装、保存与应用的行为见 [LuCI 安装说明](packaging/luci/INSTALL.md)。
 GitHub Actions 的 `OpenWrt LuCI package` 工作流提供 IPK，并测试真实 OpenWrt LuCI 页面。
 

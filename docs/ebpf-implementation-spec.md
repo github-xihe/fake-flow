@@ -396,6 +396,11 @@ fakeflow stop
 
 默认只统计，不记录完整业务载荷。诊断日志限频，包含接口、原因、配置世代和必要元组。用户态统计不能宣称“解除限速成功”；那需要独立吞吐测试。
 
+守护进程自身的输出写 `/var/log/fakeflow.log`（上限 256 KiB，超出时保留最新 128 KiB），
+不经 procd 进入 syslog：init 脚本不设 `procd_set_param stdout/stderr`，只传 `--log-file`。
+硬失败仍可从 procd 自己的实例消息在 syslog 看到。LuCI 的「运行日志」一栏从该文件读取
+（rpcd `status` 返回，按行与字节双上限），因此不依赖 logread，也不受 syslog 缓冲区大小影响。
+
 ## 14. 验收与测试
 
 ### 14.1 P0 必须先通过

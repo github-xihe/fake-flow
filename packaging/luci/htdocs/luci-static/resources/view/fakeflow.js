@@ -109,7 +109,9 @@ return view.extend({
 			section.children.forEach(function(option) { option.forcewrite = true; });
 		});
 		this.statusNode = E('div', { 'class': 'cbi-section', 'id': 'fakeflow-status' });
-		this.logsNode = E('pre', { 'id': 'fakeflow-logs', 'style': 'max-height:22em;overflow:auto;white-space:pre-wrap' });
+		this.logsNode = E('pre', { 'id': 'fakeflow-logs',
+			'style': 'max-height:30em;overflow:auto;white-space:pre-wrap;margin:0' });
+		this.logsNote = E('p', { 'class': 'cbi-section-descr', 'id': 'fakeflow-logs-note' }, []);
 		this.paintStatus(data);
 		var button = function(label, handler, id) {
 			return E('button', { 'class': 'cbi-button cbi-button-action', 'id': id,
@@ -123,6 +125,19 @@ return view.extend({
 			button('校验当前表单', this.check, 'ff-validate'), ' ',
 			button('预览 TOML', this.preview, 'ff-preview')
 		]);
+		var logButton = E('button', { 'class': 'cbi-button cbi-button-action', 'id': 'ff-log-refresh',
+			'click': ui.createHandlerFn(this, function() {
+				return status().then(this.paintStatus.bind(this)).catch(this.reportError);
+			}) }, ['刷新']);
+		/* Its own section instead of a collapsed note: the daemon keeps its output
+		 * in a file precisely so the system log stays readable, so this is where
+		 * that output is meant to be read. */
+		var logSection = E('div', { 'class': 'cbi-section', 'id': 'fakeflow-logs-section' }, [
+			E('h3', {}, ['运行日志']),
+			this.logsNote,
+			E('p', {}, [logButton]),
+			this.logsNode
+		]);
 		poll.add(function() {
 			return status().then(this.paintStatus.bind(this)).catch(function() {
 				this.statusNode.replaceChildren(E('p', {}, ['暂时无法获取状态，等待重试……']));
@@ -131,7 +146,7 @@ return view.extend({
 		return m.render().then(function(formNode) {
 			return E('div', {}, [this.statusNode, toolbar, formNode,
 				E('p', {}, ['表单保存会规范化 TOML 格式并移除注释；上次配置保存在 /etc/fakeflow.toml.luci-backup。']),
-				E('details', { 'class': 'cbi-section' }, [E('summary', {}, ['运行日志（最近 60 行）']), this.logsNode])]);
+				logSection]);
 		}.bind(this));
 	},
 	paintStatus: function(data) {
@@ -148,7 +163,10 @@ return view.extend({
 				E('table', { 'class': 'table' }, Object.keys(stats).map(function(k) {
 					return E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td' }, [k]), E('td', { 'class': 'td' }, [String(stats[k])])]);
 				}))]));
-		this.logsNode.textContent = data.logs || '暂无日志。';
+		var logs = data.logs || '';
+		this.logsNode.textContent = logs || '暂无日志。';
+		this.logsNote.textContent = '来自 /var/log/fakeflow.log（每 5 秒自动刷新；最多显示最近 400 行）'
+			+ (logs ? '，当前 ' + logs.split('\n').length + ' 行。' : '。');
 	},
 	candidate: function() {
 		this.map.checkDepends();

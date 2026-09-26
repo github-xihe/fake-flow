@@ -9,11 +9,14 @@ start_service() {
     config_get_bool enabled main enabled 0
     [ "$enabled" = 1 ] || return 0
     procd_open_instance
-    procd_set_param command /usr/sbin/fakeflow run --config /etc/fakeflow.toml
+    # The daemon keeps its own output in this file (procd would otherwise forward
+    # stdout and stderr to logd, burying the system log). Deliberately no
+    # procd_set_param stdout/stderr: those flags are what send it to syslog.
+    # A hard failure is still visible in syslog through procd's own instance
+    # messages, and the daemon's own diagnostics are shown in LuCI → 日志.
+    procd_set_param command /usr/sbin/fakeflow run --config /etc/fakeflow.toml --log-file /var/log/fakeflow.log
     procd_set_param respawn 3600 5 5
     procd_set_param file /etc/fakeflow.toml
-    procd_set_param stdout 1
-    procd_set_param stderr 1
     procd_set_param limits memlock="unlimited"
     procd_close_instance
 }

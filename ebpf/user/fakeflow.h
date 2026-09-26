@@ -37,7 +37,7 @@ int ff_config_read(const char *path, struct ff_options *out, char *error, size_t
 int ff_templates(struct ff_options *o, char *error, size_t cap);
 int ff_variants(const struct ff_options *o, struct ff_template out[][FF_TEMPLATE_VARIANTS], unsigned n);
 int ff_check(const struct ff_options *o);
-int ff_run(const char *path, const char *object, const char *runtime);
+int ff_run(const char *path, const char *object, const char *runtime, const char *logfile);
 int ff_client(const char *runtime, const char *command);
 extern const char *ff_stat_names[FF_STATS_MAX];
 #endif

@@ -79,7 +79,10 @@ status() {
 	local state stats logs enabled=0 boot=0 managed=0
 	state="$(/usr/sbin/fakeflow status 2>/dev/null)" || state='{"running":false}'
 	stats="$(/usr/sbin/fakeflow stats --json 2>/dev/null)" || stats='{}'
-	logs="$(logread -e fakeflow 2>/dev/null | tail -n 60)"
+	# The daemon writes its own log file (see the init script): keeping it out of
+	# syslog is the point, so read the file rather than logread. Bounded both by
+	# lines and by bytes because the reply travels over ubus.
+	logs="$(tail -n 400 /var/log/fakeflow.log 2>/dev/null | tail -c 20000)"
 	[ "$(uci -q get fakeflow.main.enabled)" != 1 ] || enabled=1
 	"$service" enabled >/dev/null 2>&1 && boot=1
 	is_managed && managed=1

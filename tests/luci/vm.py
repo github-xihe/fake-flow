@@ -202,6 +202,14 @@ def main():
                         expect(page.locator('#fakeflow-status')).to_contain_text('已停止', timeout=30000)
                         page.locator('#ff-start').click()
                         expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
+                        # The daemon keeps its own log file so that syslog stays clean;
+                        # the log section is where that output has to show up.
+                        expect(page.locator('#fakeflow-logs-section')).to_be_visible(timeout=15000)
+                        expect(page.locator('#fakeflow-logs')).to_contain_text('READY generation=', timeout=15000)
+                        logtext = run('cat /var/log/fakeflow.log') or ''
+                        assert 'READY generation=' in logtext, logtext[-2000:]
+                        syslog = run('logread') or ''
+                        assert 'READY generation=' not in syslog, syslog[-2000:]
                         # A console edit must not get overwritten by an old browser form.
                         run("printf '\\n# changed externally\\n' >> /etc/fakeflow.toml")
                         page.locator('.cbi-page-actions .cbi-button-save').click()

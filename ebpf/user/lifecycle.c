@@ -262,6 +262,36 @@ static void link_events(struct runtime *r) {
         for(unsigned i=0;i<r->options.device_count;i++) {forget_index(r,r->index[i]);r->index[i]=0;}
     }
 }
+/* Keep the daemon's own diagnostics out of syslog. procd forwards an instance's
+ * stdout and stderr to logd, which buries the router's system log under libbpf
+ * and per-start chatter; with --log-file the output goes to a bounded file that
+ * LuCI reads instead. The cap keeps a long-running router from filling /tmp, and
+ * the newest part is kept so the reason for the last restart stays visible. */
+#define FF_LOG_MAX (256*1024)
+#define FF_LOG_KEEP (128*1024)
+static void ff_log_redirect(const char *path) {
+    struct stat st;
+    if(!stat(path,&st) && st.st_size>FF_LOG_MAX) {
+        char keep[1050],buffer[4096];
+        if(snprintf(keep,sizeof(keep),"%s.keep",path)<(int)sizeof(keep)) {
+            FILE *in=fopen(path,"r");
+            if(in) {
+                FILE *out=fopen(keep,"w");
+                if(out) {
+                    if(!fseek(in,(long)(st.st_size-FF_LOG_KEEP),SEEK_SET)) {
+                        size_t n;while((n=fread(buffer,1,sizeof(buffer),in))>0) fwrite(buffer,1,n,out);
+                    }
+                    fclose(out);rename(keep,path);
+                }
+                fclose(in);
+            }
+        }
+    }
+    /* Append and line-buffer: LuCI reads this file while the daemon writes it. */
+    if(!freopen(path,"a",stdout)) return;
+    if(!freopen(path,"a",stderr)) return;
+    setvbuf(stdout,NULL,_IOLBF,0);
+}
 /* libbpf forwards the kernel's extack text for every failed netlink call, and two
  * of those failures are expected here. Both the TCX ingress attach and
  * bpf_tc_hook_create() ask for the clsact qdisc, so whichever of the two runs
@@ -282,10 +312,13 @@ static int ff_libbpf_print(enum libbpf_print_level level,const char *format,va_l
     }
     return vfprintf(stderr,format,args);
 }
-int ff_run(const char *path,const char *object,const char *runtime) {
+int ff_run(const char *path,const char *object,const char *runtime,const char *logfile) {
     struct runtime r={.tun=-1,.server=-1,.lock=-1,.route=-1};
     char error[1024],lockpath[1024],config_path[1024];int rc=1;__u64 last_reload=0;
     if(snprintf(config_path,sizeof(config_path),"%s",path)>=(int)sizeof(config_path))return 1;
+    /* Redirect first, so that a configuration error is still recorded where the
+     * operator looks for it. */
+    if(logfile && *logfile) ff_log_redirect(logfile);
     if(geteuid()) {fprintf(stderr,"run requires root\n");return 1;}
     libbpf_set_print(ff_libbpf_print);
     if(ff_config_read(path,&r.options,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}

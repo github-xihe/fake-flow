@@ -17,7 +17,7 @@ const char *ff_stat_names[FF_STATS_MAX]={
     "skip_len","skip_l2","skip_ipver","skip_ipv4_opts","skip_proto","skip_trunc"
 };
 int main(int argc,char **argv) {
-    const char *config="/etc/fakeflow.toml",*object="/usr/lib/fakeflow/fakeflow.bpf.o",*runtime=FF_RUNTIME_DIR;
+    const char *config="/etc/fakeflow.toml",*object="/usr/lib/fakeflow/fakeflow.bpf.o",*runtime=FF_RUNTIME_DIR,*logfile="";
     int explicit_config=0;
     if(argc<2) goto usage;
     for(int i=2;i<argc;i++) {
@@ -26,9 +26,10 @@ int main(int argc,char **argv) {
         if(!strcmp(argv[i],"--config")) {config=argv[++i];explicit_config=1;}
         else if(!strcmp(argv[i],"--object")) object=argv[++i];
         else if(!strcmp(argv[i],"--runtime-dir")) runtime=argv[++i];
+        else if(!strcmp(argv[i],"--log-file")) logfile=argv[++i];
         else goto usage;
     }
-    if(!strcmp(argv[1],"run")) return ff_run(config,object,runtime);
+    if(!strcmp(argv[1],"run")) return ff_run(config,object,runtime,logfile);
     if(!strcmp(argv[1],"check") || !strcmp(argv[1],"validate")) {
         struct ff_options o;char error[512];
         if(ff_config_read(config,&o,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
@@ -54,6 +55,6 @@ int main(int argc,char **argv) {
         return ff_client(runtime,argv[1]);
     }
 usage:
-    fprintf(stderr,"Usage: fakeflow {check|validate|run|status|stats|reload|stop} [--config FILE] [--object FILE] [--runtime-dir DIR] [--json]\n");
+    fprintf(stderr,"Usage: fakeflow {check|validate|run|status|stats|reload|stop} [--config FILE] [--object FILE] [--runtime-dir DIR] [--log-file FILE] [--json]\n");
     return 2;
 }
