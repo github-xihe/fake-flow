@@ -179,10 +179,13 @@ def main():
                         # null, and the serializer used to fail with a message that named
                         # no field ("文本不能包含双引号、反斜杠或换行"), which is exactly what
                         # was reported from the router. Both buttons must work.
+                        # Anchor on a line the earlier steps do not rewrite: the
+                        # hostname line is replaced by the custom-payload step, and the
+                        # packaged example already carries a commented https_hostname.
                         https = rpc('get')['config'].replace(
-                            '\nhostname = "www.example.com"\n',
-                            '\nhostname = "www.example.com"\nhttps_hostname = "tls.example"\n')
-                        assert 'https_hostname' in https
+                            '\ntfo = "strip-syn"\n',
+                            '\nhttps_hostname = "tls.example"\ntfo = "strip-syn"\n')
+                        assert '\nhttps_hostname = "tls.example"\n' in https, https
                         save(rpc('get'), config=https)
                         page.reload()
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=60000)
