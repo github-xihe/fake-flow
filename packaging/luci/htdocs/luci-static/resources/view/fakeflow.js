@@ -59,6 +59,12 @@ return view.extend({
 			o.depends('tcp_payload', 'http'); o.depends('tcp_payload', 'tls');
 			o = value(s, 'tcp', 'tcp_payload_file', '载荷文件路径', '路由器上已有的二进制文件，1–1200 字节；例如 /etc/fakehttp/payload.tls。');
 			o.depends('tcp_payload', 'custom');
+			value(s, 'tcp', 'tcp_https_hostname', 'HTTPS 模板伪装域名',
+				'可选。填了就在下面的端口上额外发送一份 TLS ClientHello，SNI 取此域名；与载荷文件只能填其一。');
+			value(s, 'tcp', 'tcp_https_payload_file', 'HTTPS 模板载荷文件',
+				'可选。路由器上已有的二进制文件，1–1200 字节；与伪装域名只能填其一。');
+			value(s, 'tcp', 'tcp_https_ports', 'HTTPS 模板端口',
+				'逗号分隔，最多 4 个，例如 443, 8443；留空按 443 处理。未命中的端口仍使用上面的 TCP 模板。');
 			select(s, 'tcp', 'tcp_tfo', 'TCP Fast Open', [['strip-syn', '首个 SYN 的 kind 34 替换为 NOP'], ['preserve', '保留 TFO']]);
 			value(s, 'tcp', 'tcp_max_batches', '每次握手最多批数', '范围 1–32；握手重传的注入批次间隔至少 200 ms。');
 			flag(s, 'udp', 'udp_enabled', '启用 UDP');

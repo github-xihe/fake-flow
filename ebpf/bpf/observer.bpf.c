@@ -19,7 +19,12 @@ static __always_inline int reserve(struct ff_interface *iface,struct ff_config *
     if(!ok) stat(FF_RATE_LIMITED);
     return ok;
 }
-static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,struct ff_config *c,int reverse,__u32 remote_ttl) {
+/* A BPF subprogram call passes at most five register arguments, so the hop
+ * estimate and the template plan share one word: hop count in bits 0..7,
+ * plan in bits 8..9. */
+#define FF_EMIT_META(ttl,plan) (((ttl)&0xff)|(((plan)&(FF_TEMPLATE_PLAN_COUNT-1))<<8))
+static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,struct ff_config *c,int reverse,__u32 meta) {
+    __u32 remote_ttl=meta&0xff, plan=(meta>>8)&(FF_TEMPLATE_PLAN_COUNT-1);
     __u64 now=bpf_ktime_get_ns();__u32 ttl=c->ttl,z=0;
     if(c->estimate_hops && remote_ttl) {
         __u32 initial=remote_ttl<=64?64:remote_ttl<=128?128:255;
@@ -35,8 +40,10 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
      * `repeat` read as retransmissions of a single request and must keep the
      * same branch and Call-ID, while separate triggers look like separate
      * calls. The multiply spreads the pick across all input bits instead of
-     * trusting the generator's top bits alone. */
-    __u32 variant=((bpf_get_prandom_u32()*2654435761u)>>26)&(FF_TEMPLATE_VARIANTS-1);
+     * trusting the generator's top bits alone. A plan's variant count is always
+     * a power of two (1 or FF_TEMPLATE_VARIANTS), so the mask is exact. */
+    __u32 vmax=c->variants[plan&(FF_TEMPLATE_PLAN_COUNT-1)];if(!vmax) vmax=1;
+    __u32 variant=((bpf_get_prandom_u32()*2654435761u)>>26)&(vmax-1);
     /* Only cb[0] and cb[1] are ever overwritten (with the request id), so only
      * those words are saved. Keeping them inside the request entry instead of
      * in a separate local matters: the verifier caps the combined stack of a
@@ -49,7 +56,10 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
         __u64 id=__sync_fetch_and_add(seq,1)+1;
         struct ff_request r={.expires=now+FF_REQUEST_NS,.ifindex=skb->ifindex,
             .ifgen=iface->generation,.config_gen=c->generation,.mode=iface->mode,
-            .reverse=reverse,.ttl=ttl,.variant=variant};
+            .reverse=reverse,.ttl=ttl,
+            /* The slot travels with the variant so the builder can key the
+             * template map without a second config lookup. */
+            .variant=((plan&(FF_TEMPLATE_SLOTS-1))<<FF_TEMPLATE_VARIANT_BITS)|variant};
         r.saved_cb[0]=skb->cb[0];r.saved_cb[1]=skb->cb[1];
         if(bpf_map_update_elem(&requests,&id,&r,BPF_NOEXIST)) {stat(FF_MAP_FAILED);continue;}
         skb->cb[0]=id;skb->cb[1]=id>>32;
@@ -102,10 +112,24 @@ static __always_inline int observe(struct __sk_buff *skb,int in) {
      * into skip_layout here. */
     if(parse(skb,iface,in,&p)) return TC_ACT_UNSPEC;
     if(!remote_allowed(&p,c)) {stat(FF_SKIP_PRIVATE);return TC_ACT_UNSPEC;}
+    /* Which template slot applies. A connection whose local or remote port is in
+     * the configured list uses the second TCP template, so an HTTP Host and a
+     * TLS SNI can coexist in one instance; matching either end also covers the
+     * direction we did not initiate. UDP always uses slot 0. */
+    __u32 slot=0;
+    if(p.key.protocol==6) {
+        #pragma unroll
+        for(int i=0;i<FF_HTTPS_PORTS_MAX;i++) {
+            if(i>=(int)c->port_count) break;
+            if(p.key.remote_port==(__u16)c->ports[i] ||
+               p.key.local_port==(__u16)c->ports[i]) {slot=1;break;}
+        }
+    }
+    __u32 plan=(p.key.protocol==6?0:FF_TEMPLATE_SLOTS)+slot;
     __u32 remote_ttl=0;int trigger=0;
     if(p.key.protocol==6 && c->tcp_enabled) trigger=tcp_trigger(skb,&p,c,in,now,&remote_ttl);
     else if(p.key.protocol==17 && c->udp_enabled) trigger=udp_trigger(&p,c,in,now,&remote_ttl);
-    if(trigger) emit(skb,iface,c,in,remote_ttl);
+    if(trigger) emit(skb,iface,c,in,FF_EMIT_META(remote_ttl,plan));
     return TC_ACT_UNSPEC;
 }
 SEC("tc") int ff_ingress(struct __sk_buff *skb) {return observe(skb,1);}

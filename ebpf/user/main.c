@@ -33,7 +33,14 @@ int main(int argc,char **argv) {
         struct ff_options o;char error[512];
         if(ff_config_read(config,&o,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
         if(!strcmp(argv[1],"check")) return ff_check(&o);
-        printf("Configuration valid; TCP template %u B, UDP template %u B\n",o.tcp_template.len,o.udp_template.len);return 0;
+        /* The port-matched template is reported only when the configuration
+         * defines one, so the existing line stays byte-identical otherwise. */
+        if(o.tcp_https_template.len)
+            printf("Configuration valid; TCP template %u B, TCP port-matched template %u B, UDP template %u B\n",
+                o.tcp_template.len,o.tcp_https_template.len,o.udp_template.len);
+        else
+            printf("Configuration valid; TCP template %u B, UDP template %u B\n",o.tcp_template.len,o.udp_template.len);
+        return 0;
     }
     if(!strcmp(argv[1],"status") || !strcmp(argv[1],"stats") ||
        !strcmp(argv[1],"reload") || !strcmp(argv[1],"stop")) {

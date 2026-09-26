@@ -43,14 +43,15 @@ static __noinline int build(struct __sk_buff *skb,struct ff_request *r,struct ff
            bpf_skb_load_bytes(skb,p.l4+6,&probe,2)) return -1;
         if(probe==p.checksum) {stat(FF_SKIP_LAYOUT);return -1;}
     }
-    /* The observer picks a pre-rendered variant once per trigger and passes it
-     * in the request: the randomised identity then differs between injected
-     * datagrams instead of staying fixed for the process lifetime, while the
-     * copies produced by `repeat` keep one identity and still read as a
-     * retransmission of the same request. */
-    __u32 tk=r->config_gen*(2*FF_TEMPLATE_VARIANTS)+
-        (p.key.protocol==17)*FF_TEMPLATE_VARIANTS+
-        (r->variant&(FF_TEMPLATE_VARIANTS-1));
+    /* The observer picks the slot and a pre-rendered variant once per trigger
+     * and passes both in the request: the randomised identity then differs
+     * between injected datagrams instead of staying fixed for the process
+     * lifetime, while the copies produced by `repeat` keep one identity and
+     * still read as a retransmission of the same request. Key layout is
+     * (generation, protocol, slot, variant). */
+    __u32 slot=(r->variant>>FF_TEMPLATE_VARIANT_BITS)&(FF_TEMPLATE_SLOTS-1);
+    __u32 tk=((r->config_gen*2+(p.key.protocol==17))*FF_TEMPLATE_SLOTS+slot)
+        *FF_TEMPLATE_VARIANTS+(r->variant&(FF_TEMPLATE_VARIANTS-1));
     struct ff_template *t=bpf_map_lookup_elem(&templates,&tk);
     if(!t || p.l3>30) return -1;
     __u32 payload=t->len;

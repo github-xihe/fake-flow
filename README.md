@@ -54,6 +54,8 @@ sudo build/fakeflow stop
 | `tcp.tfo` | `strip-syn` | `preserve` 可保留 SYN 选项 |
 | `tcp.directions` | `["active", "passive"]` | 按初始 SYN 方向判定 |
 | `tcp.payload` | `http` | `http` / `tls` / `custom` |
+| `tcp.https_hostname` / `tcp.https_payload_file` | 空 | 端口匹配的第二份 TCP 模板；两者只能填其一，都不填则不存在 |
+| `tcp.https_ports` | `[443]` | 逗号分隔、最多 4 个；命中这些端口的连接改用第二份模板 |
 | `udp.trigger` | `egress` | `both` 仅对已有出站记录的入站流注入 |
 | `udp.initial_packets` | `5` | 双向计数；不是 conntrack 包计数 |
 | `injection.ttl` / `repeat` | `3` / `2` | 默认低 TTL 和每批副本数 |
@@ -69,6 +71,19 @@ payload = "custom"
 payload_file = "/etc/fakeflow/tcp.bin"
 # custom 模式不要同时填写 hostname。
 ```
+
+同一实例内同时注入 HTTP 与 TLS 假包。命中 `https_ports` 的连接改用第二份模板，其余端口仍用上面的 `[tcp]`：
+
+```toml
+[tcp]
+payload = "http"
+hostname = "speed.gx.chinamobile.com"
+https_hostname = "www.speedtest.cn"          # 443 上发 TLS ClientHello，SNI 取此域名
+# https_ports = [443, 8443]                  # 留空按 443 处理，最多 4 个
+# https_payload_file = "/etc/fakeflow/tls.bin"  # 或改用二进制；与 https_hostname 只能填其一
+```
+
+选槽只看连接两端端口是否落在 `https_ports` 里（出站与入站方向都覆盖）；客户端临时端口恰好等于该值的连接也会走第二份模板，后果只是换了一份低 TTL 假包。两份模板各自预渲染，`validate` 会分别报告字节数。
 
 TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、TCP 分片、IPv4 选项、未支持的 IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。IPv4 UDP 的首片（offset=0、MF=1、含完整 UDP 头）和 `IPv6 → Fragment → UDP` 首片可触发注入，无需重组；后续分片不触发、不占用初期窗口。IPv6 atomic fragment 也按完整 UDP 数据报处理。假包重算校验和、移除分片标记/Fragment 头，真实各片保持不变；叠加其他 IPv6 扩展头仍跳过。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
 

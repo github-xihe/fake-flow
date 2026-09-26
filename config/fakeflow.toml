@@ -9,6 +9,11 @@ enabled = true
 directions = ["active", "passive"]
 payload = "http"
 hostname = "www.example.com"
+# 端口匹配的第二份 TCP 模板：命中 https_ports（默认 443）的连接改发 TLS ClientHello，
+# 其余端口仍用上面的模板。两项都留注释则不存在第二份模板。
+# https_hostname = "www.speedtest.cn"
+# https_payload_file = "/etc/fakeflow/tls.bin"
+# https_ports = [443]
 tfo = "strip-syn"
 max_batches = 3
 

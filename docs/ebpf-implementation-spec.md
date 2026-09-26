@@ -307,6 +307,11 @@ payload = "http"        # http | tls | custom
 hostname = "www.example.com"
 # payload = "custom" 时改用 payload_file，不同时设置 hostname
 # payload_file = "/etc/fakeflow/tcp-payload.bin"
+# 端口匹配的第二份 TCP 模板：命中 https_ports（默认 [443]）的连接改用它。
+# 两份模板可同时生效，例如 80 发 HTTP、443 发 TLS。都不填则不存在第二份模板。
+# https_hostname = "www.speedtest.cn"
+# https_payload_file = "/etc/fakeflow/tls.bin"
+# https_ports = [443, 8443]
 tfo = "strip-syn"      # strip-syn | preserve
 max_batches = 3
 

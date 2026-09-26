@@ -11,6 +11,15 @@
  * be a power of two: selection masks the high bits of bpf_get_prandom_u32().
  * 2 * FF_TEMPLATE_VARIANTS keys are live per configuration generation. */
 #define FF_TEMPLATE_VARIANTS 32
+/* Datagram templates are keyed by (generation, protocol, slot, variant). The
+ * slot lets one instance carry two TCP payloads at once: slot 0 is the primary
+ * template, slot 1 is the port-matched one, so an HTTP Host and a TLS SNI can
+ * coexist. UDP always uses slot 0. */
+#define FF_TEMPLATE_SLOTS 2
+#define FF_TEMPLATE_VARIANT_BITS 5
+#define FF_TEMPLATE_PLAN(proto, slot) (((proto) * FF_TEMPLATE_SLOTS) + (slot))
+#define FF_TEMPLATE_PLAN_COUNT (2 * FF_TEMPLATE_SLOTS)
+#define FF_HTTPS_PORTS_MAX 4
 #define FF_INTERFACES 8
 #define FF_NS 1000000000ULL
 #define FF_REQUEST_NS (1 * FF_NS)
@@ -35,6 +44,13 @@ struct ff_config {
     __u32 strip_tfo, tcp_batches, udp_both, udp_packets;
     __u32 udp_idle, ttl, repeat, estimate_hops;
     __u32 percent, rate, burst, allow_private;
+    /* A connection whose local or remote port matches ports[i], i < port_count,
+     * uses the second TCP template slot. port_count 0 disables the slot. */
+    __u32 ports[FF_HTTPS_PORTS_MAX], port_count;
+    /* Pre-rendered variants per plan index. The observer masks its random pick
+     * with this value so the builder always asks for a published key; a plan
+     * whose template has no randomised bytes is published with one variant. */
+    __u32 variants[FF_TEMPLATE_PLAN_COUNT];
 };
 struct ff_interface {
     __u32 generation, slot, mode, mtu, builder;

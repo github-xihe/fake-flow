@@ -42,6 +42,27 @@ assert.throws(() => config.serialize(model.settings, [{ name:'eth0',mode:'pppoe'
 const eight = Array.from({ length:8 }, (_,i) => ({ name:'eth'+i,mode:'ethernet' }));
 assert.equal(config.parse(config.serialize(model.settings, eight)).interface.length, 8);
 assert.throws(() => config.serialize(model.settings, [...eight,{ name:'eth8',mode:'ethernet' }]));
+// Port-matched second TCP template: roundtrip, default port list and rejection.
+const https = structuredClone(model);
+https.settings.tcp_https_hostname = 'tls.example';
+let text = config.serialize(https.settings, https.interface);
+assert(text.includes('https_hostname = "tls.example"'));
+assert(!text.includes('https_ports ='), 'an empty port list must be omitted so the parser default applies');
+assert.equal(config.parse(text).settings.tcp_https_hostname, 'tls.example');
+assert.deepEqual(roundtrip(https), https);
+https.settings.tcp_https_ports = '443, 8443';
+text = config.serialize(https.settings, https.interface);
+assert(text.includes('https_ports = [443, 8443]'));
+assert.equal(config.parse(text).settings.tcp_https_ports, '443, 8443');
+assert.deepEqual(roundtrip(https), https);
+for (const ports of ['0', '65536', '443, 443', '1,2,3,4,5', '443, x'])
+  assert.throws(() => config.serialize({ ...https.settings, tcp_https_ports: ports }, https.interface));
+assert.throws(() => config.serialize({ ...https.settings, tcp_https_payload_file: '/tmp/x' }, https.interface));
+const ht='hostname = "www.example.com"';
+for (const key of ['https_ports = []', 'https_ports = [443, 443]', 'https_ports = [0]', 'https_ports = [443,]'])
+  assert.throws(() => config.parse(original.replace(ht, ht + '\n' + key)));
+// The second template is omitted entirely when no payload source is configured.
+assert(!config.serialize(model.settings, model.interface).includes('https_'));
 // Check syntax of the view and every shipped JSON file too.
 new Function(fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8'));
 for (const path of ['luci/menu.d', 'rpcd/acl.d'])

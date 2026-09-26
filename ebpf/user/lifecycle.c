@@ -33,11 +33,11 @@ struct runtime {
     char owner[96];
 };
 static volatile sig_atomic_t quitting,reloading;
-/* Pre-rendered datagram variants, rebuilt on every config publish. File scope
- * keeps struct ff_options small: it is instantiated on the stack by the CLI
- * path and by reload(), so the templates must not travel inside it. */
-static struct ff_template tcp_variants[FF_TEMPLATE_VARIANTS];
-static struct ff_template udp_variants[FF_TEMPLATE_VARIANTS];
+/* Pre-rendered datagram variants, rebuilt on every config publish, indexed by
+ * FF_TEMPLATE_PLAN(proto, slot). File scope keeps struct ff_options small: it
+ * is instantiated on the stack by the CLI path and by reload(), so the
+ * templates must not travel inside it. */
+static struct ff_template variants[FF_TEMPLATE_PLAN_COUNT][FF_TEMPLATE_VARIANTS];
 static void on_signal(int s) {if(s==SIGHUP) reloading=1;else quitting=1;}
 static __u64 monotime(void) {
     struct timespec t;clock_gettime(CLOCK_MONOTONIC,&t);
@@ -150,8 +150,11 @@ static int same_layout(struct ff_options *a,struct ff_options *b) {
 }
 static void reap_configs(struct runtime *r);
 static int publish(struct runtime *r,struct ff_options *o) {
-    const unsigned span=2*FF_TEMPLATE_VARIANTS;
-    unsigned gen=r->config_gen+1,zero=0,base=gen*span,done=0;
+    /* One fixed span of map keys per generation: plan * variant. Only the plans
+     * this configuration uses are written, but the span is constant so the
+     * reaper can clear a whole generation without inspecting it. */
+    const unsigned span=FF_TEMPLATE_PLAN_COUNT*FF_TEMPLATE_VARIANTS;
+    unsigned gen=r->config_gen+1,zero=0,base=gen*span;
     if(gen>0xffffffffu/span) return -1;
     /* Bound the template map even when reloads arrive faster than the idle
      * reaper can run. Without this a burst of reloads exhausts the map (and the
@@ -162,22 +165,34 @@ static int publish(struct runtime *r,struct ff_options *o) {
     o->kernel.generation=gen;
     /* Render every variant before touching the map: a render failure must
      * leave the running generation fully intact. */
-    if(ff_variants(o,tcp_variants,udp_variants,FF_TEMPLATE_VARIANTS)) return -1;
+    if(ff_variants(o,variants,FF_TEMPLATE_VARIANTS)) return -1;
+    for(unsigned p=0;p<FF_TEMPLATE_PLAN_COUNT;p++) o->kernel.variants[p]=1;
     int fd=map(r,"templates");
-    for(;done<FF_TEMPLATE_VARIANTS;done++) {
-        unsigned kt=base+done,ku=kt+FF_TEMPLATE_VARIANTS;
-        if(bpf_map_update_elem(fd,&kt,&tcp_variants[done],BPF_NOEXIST) ||
-           bpf_map_update_elem(fd,&ku,&udp_variants[done],BPF_NOEXIST)) break;
+    for(unsigned plan=0;plan<FF_TEMPLATE_PLAN_COUNT;plan++) {
+        const struct ff_template *src;
+        if(plan==FF_TEMPLATE_PLAN(0,0)) src=&o->tcp_template;
+        else if(plan==FF_TEMPLATE_PLAN(0,1)) src=&o->tcp_https_template;
+        else if(plan==FF_TEMPLATE_PLAN(1,0)) src=&o->udp_template;
+        else continue;
+        /* An absent plan is never published and its variant count is zeroed, so
+         * the observer can never pick a key this generation did not write. */
+        if(!src->len) {o->kernel.variants[plan]=0;continue;}
+        unsigned count=o->plan[plan].variants?o->plan[plan].variants:1;
+        if(count>FF_TEMPLATE_VARIANTS) count=FF_TEMPLATE_VARIANTS;
+        o->kernel.variants[plan]=count;
+        for(unsigned v=0;v<count;v++) {
+            unsigned k=base+plan*FF_TEMPLATE_VARIANTS+v;
+            if(bpf_map_update_elem(fd,&k,&variants[plan][v],BPF_NOEXIST)) goto rollback;
+        }
     }
-    if(done!=FF_TEMPLATE_VARIANTS ||
-       bpf_map_update_elem(map(r,"configs"),&gen,&o->kernel,BPF_NOEXIST) ||
-       bpf_map_update_elem(map(r,"active_config"),&zero,&gen,BPF_ANY)) {
-        /* These keys belong to a generation that was never activated, so the
-         * whole span can be cleared unconditionally. */
-        for(unsigned v=0;v<span;v++) {unsigned k=base+v;bpf_map_delete_elem(fd,&k);}
-        bpf_map_delete_elem(map(r,"configs"),&gen);return -1;
-    }
+    if(bpf_map_update_elem(map(r,"configs"),&gen,&o->kernel,BPF_NOEXIST) ||
+       bpf_map_update_elem(map(r,"active_config"),&zero,&gen,BPF_ANY)) goto rollback;
     r->config_gen=gen;r->options=*o;return 0;
+rollback:
+    /* These keys belong to a generation that was never activated, so the whole
+     * span can be cleared unconditionally. */
+    for(unsigned v=0;v<span;v++) {unsigned k=base+v;bpf_map_delete_elem(fd,&k);}
+    bpf_map_delete_elem(map(r,"configs"),&gen);return -1;
 }
 static void reap_configs(struct runtime *r) {
     /* Retain the current and previous generation. Called after >=2 seconds
@@ -187,8 +202,8 @@ static void reap_configs(struct runtime *r) {
     while(!bpf_map_get_next_key(fd,key?&key:NULL,&next)) {
         key=next;
         if(key+1<r->config_gen) {
-            unsigned base=key*2*FF_TEMPLATE_VARIANTS;
-            for(unsigned v=0;v<2*FF_TEMPLATE_VARIANTS;v++) {
+            unsigned base=key*FF_TEMPLATE_PLAN_COUNT*FF_TEMPLATE_VARIANTS;
+            for(unsigned v=0;v<FF_TEMPLATE_PLAN_COUNT*FF_TEMPLATE_VARIANTS;v++) {
                 unsigned k=base+v;bpf_map_delete_elem(map(r,"templates"),&k);
             }
             bpf_map_delete_elem(fd,&key);key=0;

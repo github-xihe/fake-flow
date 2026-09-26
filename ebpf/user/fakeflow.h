@@ -10,19 +10,32 @@ struct ff_device { char name[IF_NAMESIZE]; unsigned mode; };
  * re-parsing the datagram. */
 #define FF_RAND_FIELDS 3
 struct ff_rand_field { __u16 off, bytes; };
+/* How a plan pre-renders its variants. SAME keeps a single byte-identical copy
+ * for a template with no randomised bytes, PATCH rewrites the recorded byte
+ * ranges, and RENDER runs the generator again for a payload whose randomness
+ * lives inside the generator (the TLS ClientHello random). */
+enum ff_variant_kind { FF_VARIANT_SAME = 0, FF_VARIANT_PATCH, FF_VARIANT_RENDER };
+/* One entry per published template, indexed by FF_TEMPLATE_PLAN(proto, slot). */
+struct ff_plan {
+    unsigned kind, variants, rand_count;
+    struct ff_rand_field rand[FF_RAND_FIELDS];
+};
 struct ff_options {
     struct ff_config kernel;
     struct ff_device devices[FF_INTERFACES];
     unsigned device_count, tcp_entries, udp_entries, lease;
     char tcp_payload[16], udp_payload[16], hostname[254], sip_uri[254];
     char tcp_file[1024], udp_file[1024];
-    struct ff_template tcp_template, udp_template;
-    struct ff_rand_field rand[FF_RAND_FIELDS];
-    unsigned rand_count;
+    /* Second TCP template, selected by port. It exists only when
+     * https_hostname or https_file is set; the payload kind is implied by which
+     * of the two was configured. */
+    char https_hostname[254], https_file[1024];
+    struct ff_template tcp_template, tcp_https_template, udp_template;
+    struct ff_plan plan[FF_TEMPLATE_PLAN_COUNT];
 };
 int ff_config_read(const char *path, struct ff_options *out, char *error, size_t cap);
 int ff_templates(struct ff_options *o, char *error, size_t cap);
-int ff_variants(const struct ff_options *o, struct ff_template *tcp, struct ff_template *udp, unsigned n);
+int ff_variants(const struct ff_options *o, struct ff_template out[][FF_TEMPLATE_VARIANTS], unsigned n);
 int ff_check(const struct ff_options *o);
 int ff_run(const char *path, const char *object, const char *runtime);
 int ff_client(const char *runtime, const char *command);

@@ -44,7 +44,7 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
     if (!f) { snprintf(error,cap,"%s: %s",path,strerror(errno)); return -1; }
     char line[2048], section[32]="", seen[128][96];
     unsigned lineno=0, count=0, version=0, sections_seen=0;
-    int bad=0;
+    int bad=0, ports_given=0;
     while (fgets(line,sizeof(line),f)) {
         lineno++;
         if (!strchr(line,'\n') && !feof(f)) { bad=1; break; }
@@ -100,6 +100,8 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         STR("tcp","payload",o->tcp_payload); STR("udp","payload",o->udp_payload);
         STR("tcp","hostname",o->hostname); STR("udp","sip_uri",o->sip_uri);
         STR("tcp","payload_file",o->tcp_file); STR("udp","payload_file",o->udp_file);
+        STR("tcp","https_hostname",o->https_hostname);
+        STR("tcp","https_payload_file",o->https_file);
         if (KEY("tcp","directions")) {
             char compact[128]; unsigned n=0;
             for(char *p=v; *p && n<sizeof(compact)-1; p++) if(!isspace((unsigned char)*p)) compact[n++]=*p;
@@ -112,6 +114,31 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         if(KEY("tcp","tfo")) {
             if(!strcmp(v,"\"strip-syn\"")) {o->kernel.strip_tfo=1;rc=0;}
             if(!strcmp(v,"\"preserve\"")) {o->kernel.strip_tfo=0;rc=0;}
+        }
+        if(KEY("tcp","https_ports")) {
+            /* [443] or [443, 8443]. This list selects the second TCP template
+             * for a connection whose local or remote port matches. An empty
+             * list, a trailing comma, a duplicate or an out-of-range port is an
+             * error rather than something quietly unreachable. */
+            char compact[128]; unsigned n=0;
+            for(char *p=v; *p && n<sizeof(compact)-1; p++) if(!isspace((unsigned char)*p)) compact[n++]=*p;
+            compact[n]=0; rc=0; ports_given=1;
+            char *p=compact;
+            if(*p++!='[' || *p==']' || !*p) rc=-1;
+            while(!rc) {
+                char *end; errno=0;
+                if(!isdigit((unsigned char)*p)) {rc=-1;break;}
+                unsigned long num=strtoul(p,&end,10);
+                if(errno || num<1 || num>65535 || end==p) {rc=-1;break;}
+                for(unsigned i=0;i<o->kernel.port_count;i++)
+                    if(o->kernel.ports[i]==num) {rc=-1;break;}
+                if(rc || o->kernel.port_count==FF_HTTPS_PORTS_MAX) {rc=-1;break;}
+                o->kernel.ports[o->kernel.port_count++]=num;
+                p=end;
+                if(*p==']' && !p[1]) break;
+                if(*p!=',') {rc=-1;break;}
+                p++;
+            }
         }
         if(KEY("udp","trigger")) {
             if(!strcmp(v,"\"egress\"")) {o->kernel.udp_both=0;rc=0;}
@@ -146,9 +173,17 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         }
     }
     if(o->kernel.burst<o->kernel.repeat) {snprintf(error,cap,"burst must be >= repeat");return -1;}
+    /* The second TCP template exists only when one of its payload sources is
+     * set, and its port list is only meaningful in that case. Without an
+     * explicit list it is selected on 443, which is what the predecessor
+     * injected as "https". */
+    if(*o->https_hostname || *o->https_file) {
+        if(!ports_given) {o->kernel.ports[0]=443;o->kernel.port_count=1;}
+    } else o->kernel.port_count=0;
     for(unsigned i=0;i<count;i++) {
         if((!strcmp(o->tcp_payload,"custom") && !strcmp(seen[i],"tcp.0.hostname")) ||
-           (!strcmp(o->udp_payload,"custom") && !strcmp(seen[i],"udp.0.sip_uri"))) {
+           (!strcmp(o->udp_payload,"custom") && !strcmp(seen[i],"udp.0.sip_uri")) ||
+           (*o->https_file && !strcmp(seen[i],"tcp.0.https_hostname"))) {
             snprintf(error,cap,"custom payload_file cannot be combined with hostname or sip_uri");return -1;
         }
     }

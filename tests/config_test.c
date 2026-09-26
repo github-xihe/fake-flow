@@ -47,5 +47,47 @@ int main(void) {
     assert(!memcmp(data,o.tcp_template.data,1200));
     FILE *f=fopen(file,"ab");assert(f);fputc(1,f);fclose(f);
     assert(ff_templates(&o,error,sizeof(error)));unlink(file);
-    puts("PASS: strict configuration, defaults, TLS lengths/SNI, binary payload bounds");return 0;
+
+    /* Second TCP template: present only when a payload source is configured, and
+     * selected by the port list, which defaults to 443. */
+    assert(!parse_text(base,&o));
+    assert(o.kernel.port_count==0 && o.tcp_https_template.len==0);
+    const char *https="version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"tls.example\"\n";
+    assert(!parse_text(https,&o));
+    assert(o.kernel.port_count==1 && o.kernel.ports[0]==443);
+    assert(o.tcp_https_template.len>43 && o.tcp_https_template.data[0]==22 && o.tcp_https_template.data[5]==1);
+    assert(memmem(o.tcp_https_template.data,o.tcp_https_template.len,"tls.example",11));
+    assert(u16(o.tcp_https_template.data+3)==o.tcp_https_template.len-5);
+    /* The primary template still matches every other port, unchanged. */
+    assert(memmem(o.tcp_template.data,o.tcp_template.len,"Host: www.example.com",21));
+    assert(o.plan[FF_TEMPLATE_PLAN(0,0)].kind==FF_VARIANT_SAME && o.plan[FF_TEMPLATE_PLAN(0,0)].variants==1);
+    assert(o.plan[FF_TEMPLATE_PLAN(0,1)].kind==FF_VARIANT_RENDER &&
+           o.plan[FF_TEMPLATE_PLAN(0,1)].variants==FF_TEMPLATE_VARIANTS);
+    assert(o.plan[FF_TEMPLATE_PLAN(1,0)].kind==FF_VARIANT_PATCH &&
+           o.plan[FF_TEMPLATE_PLAN(1,0)].variants==FF_TEMPLATE_VARIANTS);
+    /* A TLS ClientHello is re-rendered per variant, so its random differs; the
+     * HTTP template needs a single copy because it has no random bytes. */
+    static struct ff_template variants[FF_TEMPLATE_PLAN_COUNT][FF_TEMPLATE_VARIANTS];
+    assert(!ff_variants(&o,variants,FF_TEMPLATE_VARIANTS));
+    assert(memcmp(variants[FF_TEMPLATE_PLAN(0,0)][0].data,variants[FF_TEMPLATE_PLAN(0,0)][1].data,1200)==0);
+    assert(memcmp(variants[FF_TEMPLATE_PLAN(0,1)][0].data,variants[FF_TEMPLATE_PLAN(0,1)][1].data,1200)!=0);
+    assert(variants[FF_TEMPLATE_PLAN(0,1)][0].len==variants[FF_TEMPLATE_PLAN(0,1)][31].len);
+    assert(!parse_text("version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"t.example\"\nhttps_ports=[8443, 443]\n",&o));
+    assert(o.kernel.port_count==2 && o.kernel.ports[0]==8443 && o.kernel.ports[1]==443);
+
+    const char *invalid_https[]={
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_payload_file=\"/tmp/x\"\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_ports=[]\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_ports=[443,]\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_ports=[443,443]\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_ports=[0]\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_ports=[65536]\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_ports=[443,8443,9443,10443,11443]\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"bad host\"\n",
+        "version=1\n[[interfaces]]\nname=\"wan\"\n[tcp]\nhttps_hostname=\"h\"\nhttps_hostname=\"h2\"\n"
+    };
+    for(unsigned i=0;i<sizeof(invalid_https)/sizeof(invalid_https[0]);i++)
+        assert(parse_text(invalid_https[i],&o));
+    puts("PASS: strict configuration, defaults, TLS lengths/SNI, binary payload bounds, port-matched template");
+    return 0;
 }

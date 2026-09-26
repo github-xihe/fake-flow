@@ -6,6 +6,8 @@ var fields = {
 	tcp_enabled: ['bool', true], tcp_directions: ['directions', 'both'],
 	tcp_payload: ['enum', 'http', ['http', 'tls', 'custom']],
 	tcp_hostname: ['string', 'www.example.com'], tcp_payload_file: ['string', ''],
+	tcp_https_hostname: ['string', ''], tcp_https_payload_file: ['string', ''],
+	tcp_https_ports: ['ports', ''],
 	tcp_tfo: ['enum', 'strip-syn', ['strip-syn', 'preserve']], tcp_max_batches: ['number', 3, 1, 32],
 	udp_enabled: ['bool', true], udp_trigger: ['enum', 'egress', ['egress', 'both']],
 	udp_payload: ['enum', 'sip', ['sip', 'custom']], udp_sip_uri: ['string', 'sip:service@example.com'],
@@ -72,6 +74,13 @@ function parse(text) {
 				array.some(function(v) { return v !== 'active' && v !== 'passive'; }) ||
 				(array.length === 2 && array[0] === array[1])) fail();
 			parsed = array.length === 2 ? 'both' : array[0];
+		} else if (spec[0] === 'ports') {
+			var ports;
+			try { ports = JSON.parse(value); } catch (_) { fail(); }
+			if (!Array.isArray(ports) || !ports.length || ports.length > 4 ||
+				ports.some(function(v) { return !Number.isInteger(v) || v < 1 || v > 65535; }) ||
+				new Set(ports).size !== ports.length) fail();
+			parsed = ports.join(', ');
 		} else {
 			if (!/^"[^"\\\x00-\x1f]*"$/.test(value)) fail();
 			parsed = value.slice(1, -1);
@@ -96,6 +105,8 @@ function serialize(settings, interfaces) {
 	});
 	if (modes.pppoe && modes.l3) throw new Error('同一实例不能同时使用物理 PPPoE 和 L3 模式。');
 	if (+settings.injection_burst < +settings.injection_repeat) throw new Error('突发额度不能小于每批副本数。');
+	if (settings.tcp_https_hostname && settings.tcp_https_payload_file)
+		throw new Error('HTTPS 模板只能填伪装域名或载荷文件其中之一。');
 	['tcp', 'udp', 'injection', 'runtime'].forEach(function(section) {
 		lines.push('', '[' + section + ']');
 		Object.keys(fields).forEach(function(id) {
@@ -104,6 +115,10 @@ function serialize(settings, interfaces) {
 			if ((section === 'tcp' || section === 'udp') &&
 				((key === 'payload_file' && settings[section + '_payload'] !== 'custom') ||
 				((key === 'hostname' || key === 'sip_uri') && settings[section + '_payload'] === 'custom'))) return;
+			/* The port-matched template exists only when one of its payload
+			 * sources is set, so its keys are omitted otherwise. */
+			if (section === 'tcp' && key.indexOf('https_') === 0 &&
+				!settings.tcp_https_hostname && !settings.tcp_https_payload_file) return;
 			if (spec[0] === 'bool') {
 				if (value !== '0' && value !== '1') throw new Error(id + ': 开关值无效。');
 				value = value === '1' ? 'true' : 'false';
@@ -113,6 +128,16 @@ function serialize(settings, interfaces) {
 			} else if (spec[0] === 'directions') {
 				if (['active', 'passive', 'both'].indexOf(value) < 0) throw new Error('TCP 方向无效。');
 				value = value === 'both' ? '["active", "passive"]' : '[' + quote(value) + ']';
+			} else if (spec[0] === 'ports') {
+				var list = String(value === undefined || value === null ? '' : value)
+					.split(',').map(function(s) { return s.trim(); }).filter(function(s) { return s.length; });
+				if (!list.length) return;		/* omitted: the parser defaults to 443 */
+				if (list.length > 4) throw new Error(id + ': 端口列表最多 4 个端口。');
+				if (list.some(function(s) { return !/^\d+$/.test(s) || +s < 1 || +s > 65535; }))
+					throw new Error(id + ': 端口值超出范围。');
+				var nums = list.map(Number);
+				if (new Set(nums).size !== nums.length) throw new Error(id + ': 端口重复。');
+				value = '[' + nums.join(', ') + ']';
 			} else {
 				if (spec[0] === 'enum' && spec[2].indexOf(value) < 0) throw new Error(id + ': 选项无效。');
 				value = quote(value);
