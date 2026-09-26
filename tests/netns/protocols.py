@@ -327,10 +327,13 @@ def inside():
             # Full-sized binary templates also exercise the bounded checksum chunks.
             binary=bytes(range(256))*4+bytes(range(176))
             payload_file=tmp/"payload.bin";payload_file.write_bytes(binary)
-            custom=text.replace('payload = "http"',f'payload = "custom"\npayload_file = "{payload_file}"')
-            custom=custom.replace('hostname = "www.example.com"\n','')
-            custom=custom.replace('payload = "sip"',f'payload = "custom"\npayload_file = "{payload_file}"')
-            custom=custom.replace('sip_uri = "sip:service@example.com"\n','')
+            # Anchor the key replacements to whole lines: the shipped example
+            # carries commented-out keys too, and an unanchored substring match
+            # would rewrite a comment into a real (duplicate) setting.
+            custom=text.replace('\npayload = "http"\n',f'\npayload = "custom"\npayload_file = "{payload_file}"\n')
+            custom=custom.replace('\nhostname = "www.example.com"\n','\n')
+            custom=custom.replace('\npayload = "sip"\n',f'\npayload = "custom"\npayload_file = "{payload_file}"\n')
+            custom=custom.replace('\nsip_uri = "sip:service@example.com"\n','\n')
             config.write_text(custom);command("reload")
             for ipv6 in (False,True):
                 packets=capture(frame(UDP(sport=49000,dport=5060)/Raw(b"short"),ipv6=ipv6))

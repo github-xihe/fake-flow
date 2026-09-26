@@ -103,8 +103,8 @@ def main():
                 rpc('save', dict(config=original['config'], revision=original['revision'],
                                  enabled='1', autostart=True, apply=False), ok=False)
                 assert rpc('get')['revision'] == original['revision']
-                custom = original['config'].replace('payload = "http"', 'payload = "custom"').replace(
-                    'hostname = "www.example.com"', 'payload_file = "/etc/fakehttp/payload.tls"')
+                custom = original['config'].replace('\npayload = "http"\n', '\npayload = "custom"\n').replace(
+                    '\nhostname = "www.example.com"\n', '\npayload_file = "/etc/fakehttp/payload.tls"\n')
                 rpc('validate', {'config': custom}, ok=False)  # Missing payload must fail.
                 run("mkdir -p /etc/fakehttp; printf 'TEST-CUSTOM-PAYLOAD' > /etc/fakehttp/payload.tls")
                 save(original, config=custom)
@@ -234,23 +234,26 @@ def main():
                         expect(page.locator('#fakeflow-logs')).to_contain_text('synthetic-debug-line', timeout=15000)
                         page.select_option('#ff-log-level', 'info')
                         # [[tcp.extra]]: the port-matched templates are an array of
-                        # tables, so a row can be added, previewed and saved like an
-                        # interface row and survives the roundtrip through rpcd.
+                        # tables, so a row can be added and previewed like an interface
+                        # row. Save through rpcd (blocking) instead of the button:
+                        # every rpcd method holds the config lock, so a click that
+                        # applies would race the next call.
                         expect(page.get_by_text('端口匹配的 TCP 模板（[[tcp.extra]]）').first).to_be_visible(timeout=15000)
                         page.locator('button.cbi-button-add').last.click()
                         page.locator('input[id$=".hostname"]').last.fill('extra.example')
                         page.locator('input[id$=".ports"]').last.fill('8080')
                         page.locator('#ff-preview').click()
-                        expect(page.locator('.modal pre')).to_contain_text('[[tcp.extra]]', timeout=15000)
-                        expect(page.locator('.modal pre')).to_contain_text('hostname = "extra.example"')
-                        expect(page.locator('.modal pre')).to_contain_text('ports = [8080]')
+                        preview = page.locator('.modal pre')
+                        expect(preview).to_contain_text('[[tcp.extra]]', timeout=15000)
+                        expect(preview).to_contain_text('hostname = "extra.example"')
+                        expect(preview).to_contain_text('ports = [8080]')
+                        generated = preview.inner_text()
                         page.get_by_role('button', name='关闭', exact=True).click()
-                        page.locator('.cbi-page-actions .cbi-button-apply').click()
-                        expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
-                        stored = rpc('get')['config']
-                        assert '[[tcp.extra]]' in stored, stored[-500:]
-                        assert 'hostname = "extra.example"' in stored, stored[-500:]
-                        assert 'ports = [8080]' in stored, stored[-500:]
+                        save(rpc('get'), config=generated, apply=True)
+                        stored = rpc('get')
+                        assert '[[tcp.extra]]' in stored['config'], stored['config'][-400:]
+                        assert 'hostname = "extra.example"' in stored['config'], stored['config'][-400:]
+                        assert 'ports = [8080]' in stored['config'], stored['config'][-400:]
                         # The daemon accepts it and reports the extra slot separately.
                         validated = run('fakeflow validate --config /etc/fakeflow.toml')
                         assert 'TCP extra template slot 2: ' in (validated or ''), validated
