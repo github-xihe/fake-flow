@@ -182,10 +182,18 @@ return view.extend({
 			E('p', {}, ['级别：', logFilter, ' ', logButton]),
 			this.logsNode
 		]);
+		/* LuCI's poll keeps ticking in a hidden tab — it never looks at
+		 * document.hidden — and every tick costs the router about ten process
+		 * spawns (two fakeflow calls, two tails, three uci, ubus and jsonfilter).
+		 * Skip the tick while the page is not visible and refresh at once when it
+		 * comes back, so nothing shown here can go stale. */
+		var visible = function() { return document.visibilityState !== 'hidden'; };
+		document.addEventListener('visibilitychange', function() {
+			if (visible()) return this.refreshStatus();
+		}.bind(this));
 		poll.add(function() {
-			return status().then(this.paintStatus.bind(this)).catch(function() {
-				this.statusNode.replaceChildren(E('p', {}, ['暂时无法获取状态，等待重试……']));
-			}.bind(this));
+			if (!visible()) return;
+			return this.refreshStatus();
 		}.bind(this), 5);
 		return m.render().then(function(formNode) {
 			return E('div', {}, [this.statusNode, toolbar, formNode,
@@ -246,6 +254,14 @@ return view.extend({
 		return status().then(this.paintStatus.bind(this));
 	},
 	reportError: function(e) { ui.addNotification(null, E('p', {}, [e.message]), 'danger'); },
+	/* One status refresh, shared by the poll, the visibility listener and the
+	 * button handlers, so they all paint and fail the same way. */
+	refreshStatus: function() {
+		return status().then(this.paintStatus.bind(this)).catch(this.statusFailed.bind(this));
+	},
+	statusFailed: function() {
+		this.statusNode.replaceChildren(E('p', {}, ['暂时无法获取状态，等待重试……']));
+	},
 	control: function(name) {
 		return config.retry(function() { return action(name); }).then(this.result.bind(this)).catch(this.reportError);
 	},

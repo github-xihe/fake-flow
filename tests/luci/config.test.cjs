@@ -201,6 +201,11 @@ for (const bad of [{}, 5, ['a'], true])
 }
 // Check syntax of the view and every shipped JSON file too.
 new Function(fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8'));
+// The status poll must skip while the page is hidden — LuCI's own poll never looks
+// at document.hidden, and every tick costs the router about ten process spawns —
+// and it must refresh immediately when the tab comes back instead of waiting.
+assert(/visibilityState/.test(viewSource) && /visibilitychange/.test(viewSource),
+  '轮询需要在页面隐藏时跳过，并在回到前台时立即刷新一次');
 for (const path of ['luci/menu.d', 'rpcd/acl.d'])
   JSON.parse(fs.readFileSync(`packaging/luci/root/usr/share/${path}/luci-app-fakeflow.json`, 'utf8'));
 // Read-side retry of rpcd's config lock: rpcd acquires the lock before doing any

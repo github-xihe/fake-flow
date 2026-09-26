@@ -276,6 +276,22 @@ def main():
                         page.select_option('#ff-log-level', 'debug')
                         expect(page.locator('#fakeflow-logs')).to_contain_text('synthetic-debug-line', timeout=15000)
                         page.select_option('#ff-log-level', 'info')
+                        # The status poll must not run in a hidden tab (headless Chromium
+                        # keeps pages visible, so emulate the state) and returning to the
+                        # foreground must refresh at once instead of waiting for the tick.
+                        run("printf '2026-01-01 00:00:00 INFO visibility-probe-a\\n' >> /var/log/fakeflow.log")
+                        expect(page.locator('#fakeflow-logs')).to_contain_text('visibility-probe-a', timeout=20000)
+                        page.evaluate("() => { Object.defineProperty(document, 'visibilityState', "
+                                      "{ configurable: true, get: () => 'hidden' }); "
+                                      "document.dispatchEvent(new Event('visibilitychange')); }")
+                        run("printf '2026-01-01 00:00:00 INFO visibility-probe-b\\n' >> /var/log/fakeflow.log")
+                        page.wait_for_timeout(12000)
+                        assert 'visibility-probe-b' not in page.locator('#fakeflow-logs').inner_text(), \
+                            '隐藏标签页仍在轮询'
+                        page.evaluate("() => { Object.defineProperty(document, 'visibilityState', "
+                                      "{ configurable: true, get: () => 'visible' }); "
+                                      "document.dispatchEvent(new Event('visibilitychange')); }")
+                        expect(page.locator('#fakeflow-logs')).to_contain_text('visibility-probe-b', timeout=8000)
                         # [[tcp.extra]]: the port-matched templates are an array of
                         # tables, so a row can be added and previewed like an interface
                         # row. Save through rpcd (blocking) instead of the button:
