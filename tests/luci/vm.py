@@ -174,6 +174,35 @@ def main():
                         def field(key):
                             return page.locator(f'[id="widget.cbid.json.settings.{key}"]')
 
+                        def dismiss():
+                            # A stale notice would satisfy a later assertion by accident.
+                            for _ in range(page.locator('.alert-message .close').count()):
+                                page.locator('.alert-message .close').first.click()
+
+                        def validate_form():
+                            dismiss()
+                            page.locator('#ff-validate').click()
+                            expect(page.locator('.alert-message')).to_have_count(1, timeout=15000)
+                            expect(page.locator('.alert-message').first).to_contain_text('Configuration valid;')
+
+                        def apply_form():
+                            # Applying restarts the service through rpcd, which holds a
+                            # config lock while it works. A concurrently finishing
+                            # operation makes the app answer 另一个配置操作正在执行，请稍后重试,
+                            # so retry the way the user is told to instead of failing.
+                            for _ in range(3):
+                                page.locator('.cbi-page-actions .cbi-button-apply').click()
+                                try:
+                                    expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
+                                    return
+                                except AssertionError:
+                                    notices = page.locator('.alert-message')
+                                    text = notices.last.inner_text() if notices.count() else ''
+                                    if '正在执行' not in text:
+                                        raise
+                                    run('sleep 3')
+                            raise AssertionError('apply never settled')
+
                         # A config that turns the https_* template on leaves the HTTPS
                         # payload_file field empty in the form. LuCI hands that over as
                         # null, and the serializer used to fail with a message that named
@@ -193,8 +222,7 @@ def main():
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=60000)
                         expect(field('tcp_https_hostname')).to_have_value('tls.example')
                         expect(field('tcp_https_payload_file')).to_have_value('')
-                        page.locator('#ff-validate').click()
-                        expect(page.get_by_text('Configuration valid;', exact=False)).to_be_visible(timeout=15000)
+                        validate_form()
                         page.locator('#ff-preview').click()
                         expect(page.locator('.modal pre')).to_contain_text('https_hostname = "tls.example"')
                         expect(page.locator('.modal pre')).not_to_contain_text('https_payload_file')
@@ -214,15 +242,13 @@ def main():
                         tab('UDP')
                         field('udp_trigger').select_option('both')
                         field('udp_initial_packets').fill('6')
-                        page.locator('#ff-validate').click()
-                        expect(page.get_by_text('Configuration valid;', exact=False)).to_be_visible(timeout=15000)
+                        validate_form()
                         field('udp_initial_packets').fill('5')
                         page.locator('#ff-preview').click()
                         expect(page.locator('.modal pre')).to_contain_text('initial_packets = 5')
                         page.get_by_role('button', name='关闭', exact=True).click()
                         field('udp_initial_packets').fill('6')
-                        page.locator('.cbi-page-actions .cbi-button-apply').click()
-                        expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
+                        apply_form()
                         assert 'initial_packets = 6' in rpc('get')['config']
                         assert 'trigger = "both"' in rpc('get')['config']
                         page.locator('#ff-stop').click()
