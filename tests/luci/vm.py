@@ -286,12 +286,14 @@ def main():
                         assert '[[tcp.extra]]' in stored['config'], stored['config'][-400:]
                         assert 'hostname = "extra.example"' in stored['config'], stored['config'][-400:]
                         assert 'ports = [8080]' in stored['config'], stored['config'][-400:]
-                        # The form sets no https_* keys, so the entry takes the first
-                        # port-matched slot: 61 + len("extra.example") bytes is its own
-                        # ClientHello, which is what proves the extra template was the
-                        # one published rather than the primary or a leftover.
+                        # The https template set up earlier owns slot 1, so the extra
+                        # entry takes slot 2 and validate reports it on its own line:
+                        # 61 + len("extra.example") bytes is its ClientHello, which is
+                        # what proves the extra template was published, and in its own
+                        # slot rather than replacing the https one.
                         validated = run('fakeflow validate --config /etc/fakeflow.toml')
-                        assert 'TCP port-matched template 74 B' in (validated or ''), validated
+                        assert 'TCP extra template slot 2: 74 B' in (validated or ''), validated
+                        assert 'TCP port-matched template 72 B' in (validated or ''), validated
                         page.reload()
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=30000)
                         expect(page.locator('input[id$=".hostname"]')).to_have_value('extra.example', timeout=15000)
