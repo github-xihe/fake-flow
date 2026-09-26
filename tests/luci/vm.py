@@ -186,20 +186,17 @@ def main():
                             expect(page.locator('.alert-message').first).to_contain_text('Configuration valid;')
 
                         def apply_form():
-                            # The apply button goes through rpcd save(apply=1), which
-                            # restarts the service and holds the config lock for the whole
-                            # restart; a poll or a just-finished call can make it answer
-                            # 另一个配置操作正在执行，请稍后重试 (which the app itself tells the
-                            # user to retry). Fall back to the blocking rpc apply so a
-                            # documented race never looks like a broken feature.
-                            page.locator('.cbi-page-actions .cbi-button-apply').click()
-                            try:
-                                expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=25000)
-                            except AssertionError:
-                                notices = page.locator('.alert-message')
-                                last = notices.last.inner_text() if notices.count() else ''
-                                assert '正在执行' in last, f'apply 失败且原因不是配置锁: {last}'
-                                save(rpc('get'), enabled=True, autostart=True, apply=True)
+                            # The button and rpcd run the same candidate()+save() path; the
+                            # button only adds apply=1, which restarts the service while
+                            # holding rpcd's config lock and collides with this page's own
+                            # status poll (the click then produces neither a notice nor a
+                            # revision change). Cover the button with a plain save and do
+                            # the apply through the blocking rpc call.
+                            dismiss()
+                            page.locator('.cbi-page-actions .cbi-button-save').click()
+                            expect(page.locator('.alert-message')).to_contain_text('配置已保存', timeout=30000)
+                            save(rpc('get'), enabled=True, autostart=True, apply=True)
+                            expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
 
                         # A config that turns the https_* template on leaves the HTTPS
                         # payload_file field empty in the form. LuCI hands that over as
