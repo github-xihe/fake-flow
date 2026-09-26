@@ -63,6 +63,19 @@ for (const key of ['https_ports = []', 'https_ports = [443, 443]', 'https_ports 
   assert.throws(() => config.parse(original.replace(ht, ht + '\n' + key)));
 // The second template is omitted entirely when no payload source is configured.
 assert(!config.serialize(model.settings, model.interface).includes('https_'));
+// A field whose default is empty and which is always visible must accept an
+// empty value: value() sets rmempty = false, and LuCI refuses to parse a visible
+// empty field. That failure only surfaces in the browser test, so check it here.
+const viewSource = fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8');
+for (const [key, spec] of Object.entries(config.fields)) {
+  if (spec[1] !== '') continue;
+  const call = new RegExp("value\\(s, '[a-z]+', '" + key + "'");
+  const idx = viewSource.search(call);
+  if (idx < 0) continue;
+  const snippet = viewSource.slice(idx, idx + 400);
+  assert(snippet.includes('rmempty = true') || snippet.includes('.depends('),
+    key + ' 默认值为空且常显，必须设 rmempty = true 或加 depends()');
+}
 // Check syntax of the view and every shipped JSON file too.
 new Function(fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8'));
 for (const path of ['luci/menu.d', 'rpcd/acl.d'])
