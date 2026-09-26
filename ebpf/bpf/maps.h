@@ -21,7 +21,10 @@ struct ff_request {
      * branch and Call-ID, so per-clone randomness would itself be a new
      * fingerprint rather than a fix. */
     __u32 variant;
-    __u32 saved_cb[5];
+    /* Only cb[0] and cb[1] carry the request id, so the entry stores only the
+     * words that emit() overwrites. A smaller entry also shrinks emit()'s own
+     * frame, because the entry is a stack object there before it is published. */
+    __u32 saved_cb[2];
 };
 /* reported is an edge flag: a lease outage is counted once instead of once per
  * packet, and userspace clears it on every successful refresh. */

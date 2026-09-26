@@ -37,9 +37,11 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
      * calls. The multiply spreads the pick across all input bits instead of
      * trusting the generator's top bits alone. */
     __u32 variant=((bpf_get_prandom_u32()*2654435761u)>>26)&(FF_TEMPLATE_VARIANTS-1);
-    __u32 saved[5];
-    saved[0]=skb->cb[0];saved[1]=skb->cb[1];saved[2]=skb->cb[2];
-    saved[3]=skb->cb[3];saved[4]=skb->cb[4];
+    /* Only cb[0] and cb[1] are ever overwritten (with the request id), so only
+     * those words are saved. Keeping them inside the request entry instead of
+     * in a separate local matters: the verifier caps the combined stack of a
+     * caller and its callee at 512 bytes, and this function together with the
+     * inlined observer sits close to that bound. */
     for(int i=0;i<8;i++) {
         if(i>=c->repeat) break;
         if(!alive(bpf_ktime_get_ns()))break;
@@ -48,11 +50,11 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
         struct ff_request r={.expires=now+FF_REQUEST_NS,.ifindex=skb->ifindex,
             .ifgen=iface->generation,.config_gen=c->generation,.mode=iface->mode,
             .reverse=reverse,.ttl=ttl,.variant=variant};
-        __builtin_memcpy(r.saved_cb,saved,sizeof(saved));
+        r.saved_cb[0]=skb->cb[0];r.saved_cb[1]=skb->cb[1];
         if(bpf_map_update_elem(&requests,&id,&r,BPF_NOEXIST)) {stat(FF_MAP_FAILED);continue;}
         skb->cb[0]=id;skb->cb[1]=id>>32;
         long rc=bpf_clone_redirect(skb,iface->builder,0);
-        skb->cb[0]=saved[0];skb->cb[1]=saved[1];
+        skb->cb[0]=r.saved_cb[0];skb->cb[1]=r.saved_cb[1];
         struct ff_request *result=bpf_map_lookup_elem(&requests,&id);
         if(rc) stat(FF_CLONE_FAILED);
         /* fake_submit_ok means "the submission helper succeeded" and nothing
@@ -82,7 +84,6 @@ static __always_inline int observe(struct __sk_buff *skb,int in) {
         struct ff_interface *iface=bpf_map_lookup_elem(&interfaces,&idx);
         if(!iface || iface->generation!=r->ifgen || __sync_val_compare_and_swap(&r->state,2,3)!=2) return TC_ACT_SHOT;
         skb->cb[0]=r->saved_cb[0];skb->cb[1]=r->saved_cb[1];
-        skb->cb[2]=r->saved_cb[2];skb->cb[3]=r->saved_cb[3];skb->cb[4]=r->saved_cb[4];
         /* Spend the credential here instead of only in the producer, so a clone
          * that crosses this hook after the producer returned is still
          * recognised. The saved control block is read above on purpose: the map
