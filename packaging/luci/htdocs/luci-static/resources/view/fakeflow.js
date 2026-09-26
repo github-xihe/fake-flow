@@ -28,7 +28,9 @@ function value(s, tab, key, title, description) {
 }
 
 return view.extend({
-	load: function() { return get(); },
+	/* Every rpc below can collide with rpcd's config lock (acquired before any work,
+	 * so a 正在执行 reply means nothing happened); retry instead of nagging the user. */
+	load: function() { return config.retry(get); },
 	render: function(data) {
 		if (!data.ok) throw new Error(data.message || '无法读取 FakeFlow 配置。');
 		this.revision = data.revision;
@@ -244,8 +246,14 @@ return view.extend({
 		return status().then(this.paintStatus.bind(this));
 	},
 	reportError: function(e) { ui.addNotification(null, E('p', {}, [e.message]), 'danger'); },
-	control: function(name) { return action(name).then(this.result.bind(this)).catch(this.reportError); },
-	check: function() { return this.candidate().then(function(c) { return validate(c.config); }).then(this.result.bind(this)).catch(this.reportError); },
+	control: function(name) {
+		return config.retry(function() { return action(name); }).then(this.result.bind(this)).catch(this.reportError);
+	},
+	check: function() {
+		return this.candidate().then(function(c) {
+			return config.retry(function() { return validate(c.config); });
+		}).then(this.result.bind(this)).catch(this.reportError);
+	},
 	preview: function() {
 		return this.candidate().then(function(c) {
 			ui.showModal('TOML 预览', [E('pre', { 'style': 'max-height:60vh;overflow:auto' }, [c.config]),
@@ -254,7 +262,9 @@ return view.extend({
 	},
 	persist: function(apply) {
 		return this.candidate().then(function(c) {
-			return save(c.config, this.revision, c.enabled, c.autostart, apply);
+			return config.retry(function() {
+				return save(c.config, this.revision, c.enabled, c.autostart, apply);
+			}.bind(this));
 		}.bind(this)).then(this.result.bind(this)).catch(this.reportError);
 	},
 	handleSave: function() { return this.persist(false); },

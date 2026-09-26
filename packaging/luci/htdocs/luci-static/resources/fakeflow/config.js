@@ -50,6 +50,26 @@ function quote(value, field) {
 function extras_of(settings) {
 	return Array.isArray(settings.tcp_extras) ? settings.tcp_extras : [];
 }
+/* The daemon answers these two while its config lock is held. rpcd acquires the
+ * lock before doing any work (get, validate, save and action all do), so such a
+ * reply means nothing happened and the identical request can simply be repeated.
+ * Applying holds the lock across the whole service restart — long enough for the
+ * page's own 5 s status poll or an impatient second click to collide with it. */
+function transient(message) {
+	var text = message === undefined || message === null ? '' : String(message);
+	return text.indexOf('正在执行') >= 0 || text.indexOf('锁繁忙') >= 0;
+}
+function retry(fn, attempts, wait) {
+	attempts = attempts === undefined ? 4 : attempts;
+	wait = wait === undefined ? 1000 : wait;
+	return fn().then(function(result) {
+		if (attempts <= 1 || !result || result.ok !== false || !transient(result.message))
+			return result;
+		return new Promise(function(resolve) { setTimeout(resolve, wait); }).then(function() {
+			return retry(fn, attempts - 1, wait * 2);
+		});
+	});
+}
 // '443, 8443' -> [443, 8443]. The port list is the only thing that selects a
 // template, so an empty list is refused instead of quietly matching nothing.
 function port_list(value, what) {
@@ -247,4 +267,5 @@ function serialize(settings, interfaces) {
 	return lines.join('\n') + '\n';
 }
 return baseclass.extend({ fields: fields, extra_fields: extra_fields, extra_max: extra_max,
+	transient: transient, retry: retry,
 	defaults: defaults, parse: parse, serialize: serialize });

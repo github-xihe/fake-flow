@@ -7,7 +7,7 @@ PKG_VERSION:=0.1.0
 # unchanged version number simply does not install and the device keeps running
 # the old interface. .github/workflows/luci.yml enforces this against the last
 # aarch64-* tag.
-PKG_RELEASE:=7
+PKG_RELEASE:=8
 PKG_LICENSE:=GPL-2.0-only
 
 include $(INCLUDE_DIR)/package.mk

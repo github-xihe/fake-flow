@@ -203,4 +203,27 @@ for (const bad of [{}, 5, ['a'], true])
 new Function(fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8'));
 for (const path of ['luci/menu.d', 'rpcd/acl.d'])
   JSON.parse(fs.readFileSync(`packaging/luci/root/usr/share/${path}/luci-app-fakeflow.json`, 'utf8'));
-console.log('LuCI config roundtrip, boundaries, custom payloads, [[tcp.extra]] slots and injection rejection passed.');
+// Read-side retry of rpcd's config lock: rpcd acquires the lock before doing any
+// work, so 正在执行/锁繁忙 means nothing happened and the same call may be repeated.
+assert.equal(config.transient('另一个配置操作正在执行，请稍后重试。'), true);
+assert.equal(config.transient('配置锁繁忙，请稍后重试。'), true);
+for (const other of ['配置已保存并应用。', '配置已被其他页面或终端修改，请重新加载后再保存。', '', null, undefined])
+  assert.equal(config.transient(other), false, String(other));
+let lockCalls = 0;
+const flaky = () => {
+  lockCalls++;
+  return Promise.resolve(lockCalls < 3
+    ? { ok: false, message: '另一个配置操作正在执行，请稍后重试。' }
+    : { ok: true, message: '配置已保存并应用。' });
+};
+config.retry(flaky, 4, 1).then(result => {
+  assert.equal(result.ok, true, '被锁挡住后最终应成功');
+  assert.equal(lockCalls, 3, '应重试到第三次（前两次被锁挡住）');
+  let fatalCalls = 0;
+  const fatal = () => { fatalCalls++; return Promise.resolve({ ok: false, message: '配置无效。' }); };
+  return config.retry(fatal, 3, 1).then(failed => {
+    assert.equal(failed.ok, false);
+    assert.equal(fatalCalls, 1, '非锁错误不得重试');
+    console.log('LuCI config roundtrip, boundaries, custom payloads, [[tcp.extra]] slots, injection rejection and lock retry passed.');
+  });
+}).catch(error => { console.error(error); process.exitCode = 1; });
