@@ -299,12 +299,14 @@ static void ff_log_redirect(const char *path) {
  * ff_log_set the limit stays at DEBUG, so CLI and test runs keep exactly the
  * diagnostics they had before. */
 static int log_limit=FF_LOG_DEBUG;
+static int log_active;
 static const char *ff_log_names[]={"ERROR","WARN","INFO","DEBUG"};
 void ff_log_set(int level) {
     if(level<FF_LOG_ERROR) level=FF_LOG_ERROR;
     if(level>FF_LOG_DEBUG) level=FF_LOG_DEBUG;
-    log_limit=level;
+    log_limit=level;log_active=1;
 }
+int ff_log_active(void) {return log_active;}
 void ff_log(int level,const char *format,...) {
     if(level>log_limit) return;
     char text[2048];va_list args;

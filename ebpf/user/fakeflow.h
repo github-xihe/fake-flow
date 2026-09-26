@@ -44,6 +44,10 @@ int ff_check(const struct ff_options *o);
  * FF_LOG_INFO, which keeps CLI diagnostics unchanged. */
 enum { FF_LOG_ERROR = 0, FF_LOG_WARN, FF_LOG_INFO, FF_LOG_DEBUG };
 void ff_log_set(int level);
+/* Nonzero once run mode installed the logger, so shared code (the pre-flight
+ * check) can stamp its lines instead of printing unstamped output that would
+ * still land in the log file. */
+int ff_log_active(void);
 void ff_log(int level, const char *format, ...) __attribute__((format(printf,2,3)));
 int ff_run(const char *path, const char *object, const char *runtime, const char *logfile, int log_level);
 int ff_client(const char *runtime, const char *command);

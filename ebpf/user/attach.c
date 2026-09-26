@@ -78,20 +78,28 @@ int ff_tun(char *name,size_t cap) {
 }
 int ff_check(const struct ff_options *o) {
     int failed=0;
-    printf("Read-only check; no BPF program loaded or attached.\n");
+    /* The daemon calls this as a pre-flight, and after --log-file its stdout goes
+     * to the log file, so these lines must carry the same timestamp and level as
+     * the rest of the log. The CLI keeps the plain stdout form that the install
+     * notes and scripts rely on. */
+#define FF_CHECK_INFO(...) do { if(ff_log_active()) ff_log(FF_LOG_INFO,__VA_ARGS__); else printf(__VA_ARGS__); } while(0)
+#define FF_CHECK_WARN(...) do { if(ff_log_active()) ff_log(FF_LOG_WARN,__VA_ARGS__); else fprintf(stderr,__VA_ARGS__); } while(0)
+    FF_CHECK_INFO("Read-only check; no BPF program loaded or attached.\n");
     for(unsigned i=0;i<o->device_count;i++) {
         unsigned idx,mtu;
         if(ff_link(o->devices[i].name,o->devices[i].mode,&idx,&mtu)) {
-            fprintf(stderr,"%s: missing interface or incompatible link mode\n",o->devices[i].name);failed=1;continue;
+            FF_CHECK_WARN("%s: missing interface or incompatible link mode\n",o->devices[i].name);failed=1;continue;
         }
-        printf("%s: ifindex=%u mtu=%u mode=%u\n",o->devices[i].name,idx,mtu,o->devices[i].mode);
+        FF_CHECK_INFO("%s: ifindex=%u mtu=%u mode=%u\n",o->devices[i].name,idx,mtu,o->devices[i].mode);
         if(ff_priority_available(o->devices[i].name,"egress")) {
-            fprintf(stderr,"%s: TC egress priority 1 is occupied or tc inspection failed\n",o->devices[i].name);failed=1;
+            FF_CHECK_WARN("%s: TC egress priority 1 is occupied or tc inspection failed\n",o->devices[i].name);failed=1;
         }
     }
-    printf("Flow map storage estimate (before kernel overhead): %llu bytes\n",
+    FF_CHECK_INFO("Flow map storage estimate (before kernel overhead): %llu bytes\n",
         (unsigned long long)(o->tcp_entries+o->udp_entries)*(sizeof(struct ff_key)+72));
-    printf("BTF: %s; kernel helper/verifier and hardware-offload coverage require run/tests.\n",
+    FF_CHECK_INFO("BTF: %s; kernel helper/verifier and hardware-offload coverage require run/tests.\n",
         access("/sys/kernel/btf/vmlinux",R_OK)?"not available":"available");
+#undef FF_CHECK_INFO
+#undef FF_CHECK_WARN
     return failed;
 }
