@@ -55,9 +55,22 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
         skb->cb[0]=saved[0];skb->cb[1]=saved[1];
         struct ff_request *result=bpf_map_lookup_elem(&requests,&id);
         if(rc) stat(FF_CLONE_FAILED);
-        else if(result && result->state==3) stat(FF_SUBMIT_OK);
-        else if(!result || result->state!=1) stat(FF_BUILD_FAILED);
-        bpf_map_delete_elem(&requests,&id);
+        /* fake_submit_ok means "the submission helper succeeded" and nothing
+         * more. A missing entry is a submission too: the consumer took the
+         * credential and deleted it, and nothing else deletes from this map. A
+         * state of 2 means the builder already submitted while the redirected
+         * clone has not crossed the WAN egress hook yet; counting that as
+         * builder_failed was wrong because the datagram does exist. A state of
+         * 1 was already counted inside the builder, so it is not counted here
+         * a second time, and only state 0 (the builder never ran) is a failure
+         * attributable to this side. */
+        else if(!result || result->state>=2) stat(FF_SUBMIT_OK);
+        else if(result->state==0) stat(FF_BUILD_FAILED);
+        /* Keep the credential while a build is still in flight. Deleting it
+         * here made a redirected clone that crosses the hook after this lookup
+         * look like fresh traffic to the observer, which then re-triggered
+         * injection instead of blocking the loop. The consumer spends it. */
+        if(!result || result->state!=2) bpf_map_delete_elem(&requests,&id);
     }
     return 0;
 }
@@ -70,6 +83,11 @@ static __always_inline int observe(struct __sk_buff *skb,int in) {
         if(!iface || iface->generation!=r->ifgen || __sync_val_compare_and_swap(&r->state,2,3)!=2) return TC_ACT_SHOT;
         skb->cb[0]=r->saved_cb[0];skb->cb[1]=r->saved_cb[1];
         skb->cb[2]=r->saved_cb[2];skb->cb[3]=r->saved_cb[3];skb->cb[4]=r->saved_cb[4];
+        /* Spend the credential here instead of only in the producer, so a clone
+         * that crosses this hook after the producer returned is still
+         * recognised. The saved control block is read above on purpose: the map
+         * value must not be touched once the element is deleted. */
+        bpf_map_delete_elem(&requests,&id);
         stat(FF_INTERNAL);return TC_ACT_UNSPEC;
     }
     __u64 now=bpf_ktime_get_ns();
