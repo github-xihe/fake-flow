@@ -219,10 +219,15 @@ def main():
                         expect(page.locator('.modal pre')).to_contain_text('initial_packets = 5')
                         page.get_by_role('button', name='关闭', exact=True).click()
                         field('udp_initial_packets').fill('6')
-                        # Apply through the blocking rpc: the button runs the same
-                        # candidate()+save() path but holds rpcd's config lock across the
-                        # service restart, which collides with this page's status poll.
-                        save(rpc('get'), enabled=True, autostart=True, apply=True)
+                        # Apply through the blocking rpc, but with the FORM's output: read
+                        # the serialized TOML from the preview (the same candidate() path
+                        # the button uses). Passing the stored config instead would drop
+                        # every edit made in the form.
+                        page.locator('#ff-preview').click()
+                        applied = page.locator('.modal pre').inner_text()
+                        page.get_by_role('button', name='关闭', exact=True).click()
+                        assert 'initial_packets = 6' in applied, applied
+                        save(rpc('get'), config=applied, enabled=True, autostart=True, apply=True)
                         expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
                         assert 'initial_packets = 6' in rpc('get')['config']
                         assert 'trigger = "both"' in rpc('get')['config']
