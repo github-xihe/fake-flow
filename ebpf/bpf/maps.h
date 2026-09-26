@@ -26,7 +26,11 @@ MAP(active_config,BPF_MAP_TYPE_ARRAY,__u32,__u32,1);
 MAP(configs,BPF_MAP_TYPE_HASH,__u32,struct ff_config,16);
 MAP(leases,BPF_MAP_TYPE_ARRAY,__u32,struct ff_lease,1);
 MAP(interfaces,BPF_MAP_TYPE_HASH,__u32,struct ff_interface,FF_INTERFACES);
-MAP(templates,BPF_MAP_TYPE_HASH,__u32,struct ff_template,32);
+/* Holds 2 * FF_TEMPLATE_VARIANTS keys per generation. The reaper keeps the
+ * active and the previous generation (three during a publish), so 3 * 2 * 32 =
+ * 192 keys are live at the peak; 256 leaves headroom without a large
+ * preallocation. */
+MAP(templates,BPF_MAP_TYPE_HASH,__u32,struct ff_template,256);
 MAP(tcp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 MAP(udp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 /* LRU maps cannot embed bpf_spin_lock. A stable key-derived array lock guards

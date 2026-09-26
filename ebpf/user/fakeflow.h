@@ -5,6 +5,11 @@
 #include <stddef.h>
 #include <net/if.h>
 struct ff_device { char name[IF_NAMESIZE]; unsigned mode; };
+/* Byte ranges of the generated template that carry a randomised identity.
+ * Recorded while the template is rendered so variants can be produced without
+ * re-parsing the datagram. */
+#define FF_RAND_FIELDS 3
+struct ff_rand_field { __u16 off, bytes; };
 struct ff_options {
     struct ff_config kernel;
     struct ff_device devices[FF_INTERFACES];
@@ -12,9 +17,12 @@ struct ff_options {
     char tcp_payload[16], udp_payload[16], hostname[254], sip_uri[254];
     char tcp_file[1024], udp_file[1024];
     struct ff_template tcp_template, udp_template;
+    struct ff_rand_field rand[FF_RAND_FIELDS];
+    unsigned rand_count;
 };
 int ff_config_read(const char *path, struct ff_options *out, char *error, size_t cap);
 int ff_templates(struct ff_options *o, char *error, size_t cap);
+int ff_variants(const struct ff_options *o, struct ff_template *tcp, struct ff_template *udp, unsigned n);
 int ff_check(const struct ff_options *o);
 int ff_run(const char *path, const char *object, const char *runtime);
 int ff_client(const char *runtime, const char *command);

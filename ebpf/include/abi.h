@@ -3,6 +3,14 @@
 #define FAKEFLOW_ABI_H
 #include <linux/types.h>
 #define FF_PAYLOAD_MAX 1200
+/* Pre-rendered datagram variants per protocol. The builder picks one at random
+ * for every injected packet, so randomised identity fields (SIP branch, tag,
+ * Call-ID) differ between datagrams. Rendering every variant in userspace
+ * keeps the datapath free of byte patching and checksum surgery, and variant 0
+ * stays byte-identical to the canonical template that `validate` reports. Must
+ * be a power of two: selection masks the high bits of bpf_get_prandom_u32().
+ * 2 * FF_TEMPLATE_VARIANTS keys are live per configuration generation. */
+#define FF_TEMPLATE_VARIANTS 32
 #define FF_INTERFACES 8
 #define FF_NS 1000000000ULL
 #define FF_REQUEST_NS (1 * FF_NS)

@@ -126,7 +126,7 @@ jobs:
 
           | 资产 | 说明 |
           | --- | --- |
-          | `fakeflow-0.1.0-r6.apk` | 主程序（含 eBPF 对象 `/usr/lib/fakeflow/fakeflow.bpf.o`）|
+          | `fakeflow-0.1.0-r7.apk` | 主程序（含 eBPF 对象 `/usr/lib/fakeflow/fakeflow.bpf.o`）|
           | `luci-app-fakeflow-0.1.0-r1.apk` | LuCI 界面（noarch）|
           | `SHA256SUMS` / `BUILD.txt` | 校验值与构建来源（SDK/目标/commit）|
 
@@ -134,7 +134,7 @@ jobs:
 
           ```sh
           cd /tmp && sha256sum -c SHA256SUMS
-          apk add --allow-untrusted ./fakeflow-0.1.0-r6.apk ./luci-app-fakeflow-0.1.0-r1.apk
+          apk add --allow-untrusted ./fakeflow-0.1.0-r7.apk ./luci-app-fakeflow-0.1.0-r1.apk
           fakeflow validate --config /etc/fakeflow.toml
           fakeflow check    --config /etc/fakeflow.toml
           ```
