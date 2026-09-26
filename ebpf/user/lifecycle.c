@@ -8,6 +8,7 @@
 #include <linux/rtnetlink.h>
 #include <poll.h>
 #include <signal.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -261,11 +262,32 @@ static void link_events(struct runtime *r) {
         for(unsigned i=0;i<r->options.device_count;i++) {forget_index(r,r->index[i]);r->index[i]=0;}
     }
 }
+/* libbpf forwards the kernel's extack text for every failed netlink call, and two
+ * of those failures are expected here. Both the TCX ingress attach and
+ * bpf_tc_hook_create() ask for the clsact qdisc, so whichever of the two runs
+ * second gets -EEXIST, because ff_detach() keeps that qdisc on purpose (another
+ * tool's filters may have been added meanwhile). Measured: 1 message when no
+ * qdisc exists yet, 2 when it does; the filters attach and the service runs in
+ * both cases. Report the fact once in our own words instead of alarming
+ * "Kernel error message" lines at err level. Everything else still goes through. */
+static int ff_libbpf_print(enum libbpf_print_level level,const char *format,va_list args) {
+    if(level==LIBBPF_WARN) {
+        char text[256];va_list copy;
+        va_copy(copy,args);vsnprintf(text,sizeof(text),format,copy);va_end(copy);
+        if(strstr(text,"Exclusivity flag on, cannot modify")) {
+            static int reported;
+            if(!reported) {reported=1;fprintf(stderr,"fakeflow: clsact qdisc already present, reusing it\n");}
+            return 0;
+        }
+    }
+    return vfprintf(stderr,format,args);
+}
 int ff_run(const char *path,const char *object,const char *runtime) {
     struct runtime r={.tun=-1,.server=-1,.lock=-1,.route=-1};
     char error[1024],lockpath[1024],config_path[1024];int rc=1;__u64 last_reload=0;
     if(snprintf(config_path,sizeof(config_path),"%s",path)>=(int)sizeof(config_path))return 1;
     if(geteuid()) {fprintf(stderr,"run requires root\n");return 1;}
+    libbpf_set_print(ff_libbpf_print);
     if(ff_config_read(path,&r.options,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
     /* Reject ambiguous logical/physical PPPoE duplication conservatively. */
     unsigned l3=0,pppoe=0;

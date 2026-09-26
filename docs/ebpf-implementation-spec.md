@@ -388,6 +388,12 @@ fakeflow stop
 - `skip_private_remote`、`skip_near_peer`、`ttl_unestimated`、`skip_fragment`、`skip_gso`、`skip_layout`。
 - `map_insert_failed`、`request_expired`、`rate_limited`、`lease_expired`、`internal_loop_blocked`。
 
+约定保留 clsact qdisc 的前提是：再次启动必然有一次「qdisc 已存在」的失败——TCX ingress 挂载
+与 `bpf_tc_hook_create()` 都会请求创建 clsact，后执行的那个拿到 `-EEXIST`。两者都按设计容忍
+（`ff_attach` 显式判断 `-EEXIST`），因此不得上报为错误，也不要直接输出内核 extack 原文；用户态
+把它汇总成一行「clsact 已存在、复用」。实测：从未创建过 qdisc 时 1 条，qdisc 已存在时 2 条，
+两种情况过滤器都正常挂载、服务都正常进入 READY。
+
 默认只统计，不记录完整业务载荷。诊断日志限频，包含接口、原因、配置世代和必要元组。用户态统计不能宣称“解除限速成功”；那需要独立吞吐测试。
 
 ## 14. 验收与测试
