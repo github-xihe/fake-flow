@@ -186,7 +186,9 @@ def main():
                             '\ntfo = "strip-syn"\n',
                             '\nhttps_hostname = "tls.example"\ntfo = "strip-syn"\n')
                         assert '\nhttps_hostname = "tls.example"\n' in https, https
-                        save(rpc('get'), config=https)
+                        # save() defaults to enabled=False, which would stop the service
+                        # and make the later "apply" run the stop path instead of restart.
+                        save(rpc('get'), config=https, enabled=True, autostart=True)
                         page.reload()
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=60000)
                         expect(field('tcp_https_hostname')).to_have_value('tls.example')
