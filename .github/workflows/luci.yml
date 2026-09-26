@@ -23,6 +23,23 @@ jobs:
       OPENWRT_VERSION: 24.10.5
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: 校验 LuCI 包版本已随界面改动提升
+        run: |
+          prev=$(git describe --tags --abbrev=0 --match 'aarch64-*' HEAD^ 2>/dev/null \
+                 || git describe --tags --abbrev=0 --match 'aarch64-*' HEAD 2>/dev/null || true)
+          if [ -z "$prev" ]; then echo "无可比较的 aarch64-* tag，跳过版本一致性检查"; exit 0; fi
+          if git diff --quiet "$prev" HEAD -- packaging/luci; then
+            echo "packaging/luci 自 $prev 起未变化，跳过"; exit 0
+          fi
+          now=$(sed -n 's/^PKG_RELEASE:=//p' packaging/luci/Makefile)
+          was=$(git show "$prev:packaging/luci/Makefile" | sed -n 's/^PKG_RELEASE:=//p')
+          echo "luci-app-fakeflow PKG_RELEASE: ${was:-?} -> ${now:-?}"
+          if [ -z "$now" ] || [ "$now" = "$was" ]; then
+            echo "::error::packaging/luci 已改动但 PKG_RELEASE 未提升（仍是 ${now:-未设置}）。同名包不会在设备上更新，装机后仍跑旧界面，表单可能认不出配置里的新字段。请提升 packaging/luci/Makefile 的 PKG_RELEASE。"
+            exit 1
+          fi
       - name: Configuration module tests
         run: node tests/luci/config.test.cjs
       - name: Install prerequisites
