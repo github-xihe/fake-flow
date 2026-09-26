@@ -199,15 +199,13 @@ def main():
                         page.get_by_role('button', name='关闭', exact=True).click()
 
                         # Read-side lock retry, deterministically: hold rpcd's config lock
-                        # for three seconds (the pid must be alive, that is what acquire
-                        # checks) and click validate. rpcd takes the lock before doing any
-                        # work, so the first attempt is answered with 另一个配置操作正在执行;
-                        # the view has to retry and show the result — never that notice.
-                        run("mkdir -p /var/lock/fakeflow-luci; sleep 30 & P=$!; "
-                            "echo $P > /var/lock/fakeflow-luci/pid; "
-                            "(sleep 3; kill $P 2>/dev/null; rm -f /var/lock/fakeflow-luci/pid; "
-                            "rmdir /var/lock/fakeflow-luci 2>/dev/null) >/dev/null 2>&1 &")
+                        # (pid 1 is alive, which is all acquire checks), click validate and
+                        # release it three seconds later. rpcd takes the lock before doing
+                        # any work, so the first attempts are answered with 另一个配置操作正在执行;
+                        # the view has to retry and show the result, never that notice.
+                        run("mkdir -p /var/lock/fakeflow-luci; echo 1 > /var/lock/fakeflow-luci/pid")
                         page.locator('#ff-validate').click()
+                        run("sleep 3; rm -f /var/lock/fakeflow-luci/pid; rmdir /var/lock/fakeflow-luci 2>/dev/null || true")
                         expect(page.get_by_text('Configuration valid;', exact=False)).to_be_visible(timeout=40000)
                         expect(page.get_by_text('另一个配置操作正在执行', exact=False)).to_have_count(0)
 
