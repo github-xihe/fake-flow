@@ -174,6 +174,27 @@ def main():
                         def field(key):
                             return page.locator(f'[id="widget.cbid.json.settings.{key}"]')
 
+                        # A config that turns the https_* template on leaves the HTTPS
+                        # payload_file field empty in the form. LuCI hands that over as
+                        # null, and the serializer used to fail with a message that named
+                        # no field ("文本不能包含双引号、反斜杠或换行"), which is exactly what
+                        # was reported from the router. Both buttons must work.
+                        https = rpc('get')['config'].replace(
+                            '\nhostname = "www.example.com"\n',
+                            '\nhostname = "www.example.com"\nhttps_hostname = "tls.example"\n')
+                        assert 'https_hostname' in https
+                        save(rpc('get'), config=https)
+                        page.reload()
+                        expect(page.locator('#fakeflow-status')).to_be_visible(timeout=60000)
+                        expect(field('tcp_https_hostname')).to_have_value('tls.example')
+                        expect(field('tcp_https_payload_file')).to_have_value('')
+                        page.locator('#ff-validate').click()
+                        expect(page.get_by_text('Configuration valid;', exact=False)).to_be_visible(timeout=15000)
+                        page.locator('#ff-preview').click()
+                        expect(page.locator('.modal pre')).to_contain_text('https_hostname = "tls.example"')
+                        expect(page.locator('.modal pre')).not_to_contain_text('https_payload_file')
+                        page.get_by_role('button', name='关闭', exact=True).click()
+
                         tab('TCP')
                         expect(field('tcp_payload_file')).to_have_value('/etc/fakehttp/payload.tls')
                         field('tcp_payload').select_option('http')

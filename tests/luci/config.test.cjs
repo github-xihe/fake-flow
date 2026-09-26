@@ -150,6 +150,40 @@ for (const bad of [
 assert.throws(() => config.parse(original.replace(ht, ht + '\nhttps_hostname = "h"') +
   '\n[[tcp.extra]]\nhostname = "a"\nports = [443]\n'));
 assert.throws(() => config.parse(original + entry.repeat(4)));
+// LuCI hands over null/undefined for a form field the user left empty, and a
+// freshly added table row can miss option keys entirely. Neither may fail the
+// whole form, and when something *is* wrong the message must name the field.
+const formLike = { ...model.settings, tcp_payload_file: null, tcp_https_hostname: null,
+  tcp_https_payload_file: null, udp_payload_file: null };
+assert.equal(config.serialize(formLike, model.interface), config.serialize(model.settings, model.interface),
+  'empty optional fields must serialize exactly as if they were unset');
+const sparseRow = { ...model.settings, tcp_extras: [{ hostname: 'x.example', ports: '9000' }] };
+assert(config.serialize(sparseRow, model.interface).includes('payload = "tls"'),
+  'a row without a payload key must default to tls');
+assert.equal(config.parse(config.serialize(sparseRow, model.interface)).settings.tcp_extras[0].payload, 'tls');
+for (const [settings, expected] of [
+  [{ ...model.settings, tcp_hostname: 'x"\ny' }, /tcp\.hostname.*不能包含双引号/],
+  [{ ...model.settings, tcp_hostname: null }, /tcp\.hostname.*不能为空/],
+  [{ ...model.settings, udp_initial_packets: null }, /udp\.initial_packets.*需要一个整数/],
+  [{ ...model.settings, tcp_extras: [{ hostname: 'a"b', ports: '1' }] }, /\[\[tcp\.extra\]\] hostname.*不能包含双引号/],
+  [{ ...model.settings, tcp_https_hostname: 'h', tcp_extras: [
+    { hostname: 'a', ports: '1' }, { hostname: 'b', ports: '2' }, { hostname: 'c', ports: '3' }] }, /最多 3 个/]
+]) assert.throws(() => config.serialize(settings, model.interface), expected);
+// The reported failure: a config that turns on the https_* template leaves the
+// HTTPS payload_file empty in the form, LuCI hands that over as null/undefined,
+// and the serializer used to die with a message that named no field.
+const httpsForm = { ...model.settings, tcp_https_hostname: 'tls.example', tcp_https_payload_file: null };
+const httpsText = config.serialize(httpsForm, model.interface);
+assert(httpsText.includes('https_hostname = "tls.example"'), httpsText);
+assert(!httpsText.includes('https_payload_file'),
+  'an empty optional field is omitted, not written as key = ""');
+assert.deepEqual(config.parse(httpsText).settings.tcp_https_hostname, 'tls.example');
+for (const off of [null, undefined, 0, ''])
+  assert(!config.serialize({ ...model.settings, tcp_https_hostname: off, tcp_https_payload_file: null },
+    model.interface).includes('https_hostname'), String(off));
+for (const bad of [{}, 5, ['a'], true])
+  assert.throws(() => config.serialize({ ...model.settings, tcp_https_hostname: bad, tcp_https_payload_file: null },
+    model.interface), /tcp\.https_hostname/);
 // A JSONMap section renders the rows found under a model key of the same name:
 // `interface` comes from config.parse, so anything else must be assigned in the
 // view. Without it the table shows up empty and the next save drops the entries.

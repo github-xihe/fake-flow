@@ -36,9 +36,15 @@ function defaults() {
 	});
 	return values;
 }
-function quote(value) {
-	if (typeof value !== 'string' || /["\\\x00-\x1f]/.test(value))
-		throw new Error('文本不能包含双引号、反斜杠或换行。');
+function quote(value, field) {
+	var where = field ? field + '：' : '';
+	/* Name the field: a bare "text must not contain quotes" leaves the user
+	 * hunting 27 options, and a non-string value (LuCI hands over null for a field
+	 * the form left empty) produced exactly the same unhelpful message. */
+	if (typeof value !== 'string')
+		throw new Error(where + '需要一个文本值，实际收到' + (value === null ? '空值' : typeof value) + '。');
+	if (/["\\\x00-\x1f]/.test(value))
+		throw new Error(where + '文本不能包含双引号、反斜杠或换行。');
 	return '"' + value + '"';
 }
 function extras_of(settings) {
@@ -74,7 +80,11 @@ function check_extras(settings) {
 			throw new Error(what + '：伪装域名与载荷文件只能填其一。');
 		if (!entry.hostname && !entry.payload_file)
 			throw new Error(what + '：需要伪装域名或载荷文件。');
-		if (['tls', 'http'].indexOf(entry.payload) < 0)
+		/* A freshly added row may not carry the payload key at all: that means the
+		 * documented default, not an invalid choice. */
+		var kind = entry.payload === undefined || entry.payload === null || entry.payload === ''
+			? 'tls' : entry.payload;
+		if (['tls', 'http'].indexOf(kind) < 0)
 			throw new Error(what + '：生成类型无效。');
 		// The datapath takes the first slot whose list contains the port, so a port
 		// claimed twice would leave one of the templates unreachable.
@@ -177,6 +187,9 @@ function serialize(settings, interfaces) {
 		Object.keys(fields).forEach(function(id) {
 			if (id.indexOf(section + '_') !== 0) return;
 			var key = id.slice(section.length + 1), spec = fields[id], value = settings[id];
+			/* Complain in TOML terms (`tcp.https_hostname`), which is what the user
+			 * sees in the file and in the TOML preview. */
+			var label = section + '.' + key;
 			if ((section === 'tcp' || section === 'udp') &&
 				((key === 'payload_file' && settings[section + '_payload'] !== 'custom') ||
 				((key === 'hostname' || key === 'sip_uri') && settings[section + '_payload'] === 'custom'))) return;
@@ -185,20 +198,35 @@ function serialize(settings, interfaces) {
 			if (section === 'tcp' && key.indexOf('https_') === 0 &&
 				!settings.tcp_https_hostname && !settings.tcp_https_payload_file) return;
 			if (spec[0] === 'bool') {
-				if (value !== '0' && value !== '1') throw new Error(id + ': 开关值无效。');
+				if (value !== '0' && value !== '1') throw new Error(label + ': 开关值无效。');
 				value = value === '1' ? 'true' : 'false';
 			} else if (spec[0] === 'number') {
-				if (!/^\d+$/.test(String(value)) || +value < spec[2] || +value > spec[3]) throw new Error(id + ': 数值超出范围。');
+				if (!/^\d+$/.test(String(value))) throw new Error(label + ': 需要一个整数。');
+				if (+value < spec[2] || +value > spec[3])
+					throw new Error(label + ': 数值超出范围（' + spec[2] + '–' + spec[3] + '）。');
 				value = String(+value);
 			} else if (spec[0] === 'directions') {
-				if (['active', 'passive', 'both'].indexOf(value) < 0) throw new Error('TCP 方向无效。');
-				value = value === 'both' ? '["active", "passive"]' : '[' + quote(value) + ']';
+				if (['active', 'passive', 'both'].indexOf(value) < 0) throw new Error(label + ': TCP 方向无效。');
+				value = value === 'both' ? '["active", "passive"]' : '[' + quote(value, label) + ']';
 			} else if (spec[0] === 'ports') {
 				if (!String(value === undefined || value === null ? '' : value).trim()) return;	/* omitted: 443 */
-				value = '[' + port_list(value, id).join(', ') + ']';
+				value = '[' + port_list(value, label).join(', ') + ']';
 			} else {
-				if (spec[0] === 'enum' && spec[2].indexOf(value) < 0) throw new Error(id + ': 选项无效。');
-				value = quote(value);
+				if (spec[0] === 'enum' && spec[2].indexOf(value) < 0) throw new Error(label + ': 选项无效。');
+				/* LuCI hands over null/undefined for a field the form left empty.
+				 * Treat that as "not set": a field whose declared default is not empty
+				 * is still required, but an optional one must not fail the whole form
+				 * (which is what produced a bare "cannot contain quotes" notice). */
+				if (value === undefined || value === null) value = '';
+				/* An empty optional field means "not set": omit the key instead of
+				 * writing `key = ""`. That is what the form hands over for a field the
+				 * user never filled — e.g. https_payload_file while https_hostname is
+				 * set — and writing it empty would also be noise in the file. */
+				if (!value) {
+					if (spec[1] !== '') throw new Error(label + ': 不能为空。');
+					return;
+				}
+				value = quote(value, label);
 			}
 			lines.push(key + ' = ' + value);
 		});
@@ -207,10 +235,11 @@ function serialize(settings, interfaces) {
 		if (section !== 'tcp') return;
 		extras.forEach(function(entry) {
 			lines.push('', '[[tcp.extra]]');
-			if (entry.payload_file) lines.push('payload_file = ' + quote(entry.payload_file));
+			if (entry.payload_file) lines.push('payload_file = ' + quote(entry.payload_file, '[[tcp.extra]] payload_file'));
 			else {
-				lines.push('hostname = ' + quote(entry.hostname));
-				lines.push('payload = ' + quote(entry.payload === 'http' ? 'http' : 'tls'));
+				var host = entry.hostname === undefined || entry.hostname === null ? '' : entry.hostname;
+				lines.push('hostname = ' + quote(host, '[[tcp.extra]] hostname'));
+				lines.push('payload = ' + quote(entry.payload === 'http' ? 'http' : 'tls', '[[tcp.extra]] payload'));
 			}
 			lines.push('ports = [' + port_list(entry.ports, '[[tcp.extra]]').join(', ') + ']');
 		});
