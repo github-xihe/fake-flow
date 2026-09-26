@@ -254,9 +254,12 @@ def main():
                         assert '[[tcp.extra]]' in stored['config'], stored['config'][-400:]
                         assert 'hostname = "extra.example"' in stored['config'], stored['config'][-400:]
                         assert 'ports = [8080]' in stored['config'], stored['config'][-400:]
-                        # The daemon accepts it and reports the extra slot separately.
+                        # The form sets no https_* keys, so the entry takes the first
+                        # port-matched slot: 61 + len("extra.example") bytes is its own
+                        # ClientHello, which is what proves the extra template was the
+                        # one published rather than the primary or a leftover.
                         validated = run('fakeflow validate --config /etc/fakeflow.toml')
-                        assert 'TCP extra template slot 2: ' in (validated or ''), validated
+                        assert 'TCP port-matched template 74 B' in (validated or ''), validated
                         page.reload()
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=30000)
                         expect(page.locator('input[id$=".hostname"]')).to_have_value('extra.example', timeout=15000)
