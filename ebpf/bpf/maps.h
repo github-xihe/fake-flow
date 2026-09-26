@@ -16,6 +16,11 @@ struct ff_lock { struct bpf_spin_lock lock; __u32 reserved; };
 struct ff_request {
     __u64 expires;
     __u32 state, ifindex, ifgen, config_gen, mode, reverse, ttl;
+    /* Template variant chosen once per trigger so that every clone of the same
+     * fake datagram carries one identity. A SIP retransmission must reuse its
+     * branch and Call-ID, so per-clone randomness would itself be a new
+     * fingerprint rather than a fix. */
+    __u32 variant;
     __u32 saved_cb[5];
 };
 /* reported is an edge flag: a lease outage is counted once instead of once per

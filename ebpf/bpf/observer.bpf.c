@@ -31,6 +31,12 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
     if(!reserve(iface,c,now)) return 0;
     __u64 *seq=bpf_map_lookup_elem(&sequence,&z);
     if(!seq) return 0;
+    /* One variant per trigger, shared by every clone: the copies produced by
+     * `repeat` read as retransmissions of a single request and must keep the
+     * same branch and Call-ID, while separate triggers look like separate
+     * calls. The multiply spreads the pick across all input bits instead of
+     * trusting the generator's top bits alone. */
+    __u32 variant=((bpf_get_prandom_u32()*2654435761u)>>26)&(FF_TEMPLATE_VARIANTS-1);
     __u32 saved[5];
     saved[0]=skb->cb[0];saved[1]=skb->cb[1];saved[2]=skb->cb[2];
     saved[3]=skb->cb[3];saved[4]=skb->cb[4];
@@ -41,7 +47,7 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
         __u64 id=__sync_fetch_and_add(seq,1)+1;
         struct ff_request r={.expires=now+FF_REQUEST_NS,.ifindex=skb->ifindex,
             .ifgen=iface->generation,.config_gen=c->generation,.mode=iface->mode,
-            .reverse=reverse,.ttl=ttl};
+            .reverse=reverse,.ttl=ttl,.variant=variant};
         __builtin_memcpy(r.saved_cb,saved,sizeof(saved));
         if(bpf_map_update_elem(&requests,&id,&r,BPF_NOEXIST)) {stat(FF_MAP_FAILED);continue;}
         skb->cb[0]=id;skb->cb[1]=id>>32;
