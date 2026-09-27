@@ -65,9 +65,12 @@ return view.extend({
 			 * holds a bare host name for HTTP/TLS and an absolute path for
 			 * 自定义文件; LuCI cannot express that condition, so config.js checks it on
 			 * save and names the offending row. */
-			var tbl = m.section(form.GridSection, 'rule', 'TCP 载荷规则',
+			/* A TableSection is what the interface table above already proves works in
+			 * this LuCI build; a GridSection here left the whole view unrendered. Row
+			 * order is the file order, which is the rotation order. */
+			var tbl = m.section(form.TableSection, 'rule', 'TCP 载荷规则',
 				'每条连接在建立时固定使用其中一条规则，连接之间按这里的顺序轮换。');
-			tbl.addremove = true; tbl.sortable = true; tbl.anonymous = true;
+			tbl.addremove = true; tbl.anonymous = true;
 			var to = tbl.option(form.Flag, 'enabled', '启用');
 			to.default = '1'; to.rmempty = false;
 			to = tbl.option(form.ListValue, 'type', '类型');

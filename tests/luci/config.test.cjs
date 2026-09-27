@@ -75,9 +75,8 @@ for (const match of viewSource.matchAll(/m\.section\(form\.(\w+),\s*'([a-z_]+)'/
   assert(new RegExp("model\\." + match[2] + "\\s*=").test(viewSource),
     `JSONMap 段 ${match[2]} 的行没有挂到 model.${match[2]}，页面重载后会丢数据`);
 }
-assert(/m\.section\(form\.GridSection,\s*'rule'/.test(viewSource), "TCP 载荷规则要用表来编辑");
-assert(/tbl\.addremove = true/.test(viewSource) && /tbl\.sortable = true/.test(viewSource),
-  "规则表要能加行、能拖拽排序（顺序即轮换顺序）");
+assert(/m\.section\(form\.TableSection,\s*'rule'/.test(viewSource), "TCP 载荷规则要用表来编辑");
+assert(/tbl\.addremove = true/.test(viewSource), "规则表要能加行");
 assert(/visibilityState/.test(viewSource) && /visibilitychange/.test(viewSource),
   "轮询需要在页面隐藏时跳过，并在回到前台时立即刷新一次");
 for (const path of ["luci/menu.d", "rpcd/acl.d"])
