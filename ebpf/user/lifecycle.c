@@ -35,7 +35,7 @@ struct runtime {
 };
 static volatile sig_atomic_t quitting,reloading;
 /* Pre-rendered datagram variants, rebuilt on every config publish, indexed by
- * FF_TEMPLATE_PLAN(proto, slot). File scope keeps struct ff_options small: it
+ * FF_TEMPLATE_PLAN_*. File scope keeps struct ff_options small: it
  * is instantiated on the stack by the CLI path and by reload(), so the
  * templates must not travel inside it. */
 static struct ff_template variants[FF_TEMPLATE_PLAN_COUNT][FF_TEMPLATE_VARIANTS];
@@ -174,8 +174,8 @@ static int publish(struct runtime *r,struct ff_options *o) {
         /* The TCP plans are the slots themselves and slot 0 mirrors the primary
          * template, so a slot the configuration did not define has len 0 and is
          * skipped below; UDP publishes only its slot 0. */
-        if(plan<FF_TEMPLATE_SLOTS) src=&o->slots[plan].tpl;
-        else if(plan==FF_TEMPLATE_PLAN(1,0)) src=&o->udp_template;
+        if(plan<FF_TCP_RULES_MAX) src=&o->rules[plan].tpl;
+        else if(plan==FF_TEMPLATE_PLAN_UDP) src=&o->udp_template;
         else continue;
         /* An absent plan is never published and its variant count is zeroed, so
          * the observer can never pick a key this generation did not write. */

@@ -11,15 +11,21 @@
  * be a power of two: selection masks the high bits of bpf_get_prandom_u32().
  * 2 * FF_TEMPLATE_VARIANTS keys are live per configuration generation. */
 #define FF_TEMPLATE_VARIANTS 32
-/* Datagram templates are keyed by (generation, protocol, slot, variant). Slot 0
- * is the primary TCP template and carries every connection the second template
- * does not claim; slot 1 is that second TCP template, selected by port through the
- * https_* keys. UDP always uses slot 0. */
-#define FF_TEMPLATE_SLOTS 2
+/* Datagram templates are keyed by (generation, plan, variant); a plan is one TCP
+ * payload rule (0..FF_TCP_RULES_MAX-1) or FF_TEMPLATE_PLAN_UDP for UDP. Rules are
+ * not selected by port any more: a connection is assigned one rule when its flow
+ * state is created and keeps it for its lifetime, so consecutive connections
+ * rotate through the configured rules while a single connection never mixes two
+ * payload shapes. */
+#define FF_TCP_RULES_MAX 3
 #define FF_TEMPLATE_VARIANT_BITS 5
-#define FF_TEMPLATE_PLAN(proto, slot) (((proto) * FF_TEMPLATE_SLOTS) + (slot))
-#define FF_TEMPLATE_PLAN_COUNT (2 * FF_TEMPLATE_SLOTS)
-#define FF_HTTPS_PORTS_MAX 4
+#define FF_TEMPLATE_PLAN_UDP FF_TCP_RULES_MAX
+#define FF_TEMPLATE_PLAN_COUNT (FF_TCP_RULES_MAX + 1)
+/* Template map key: one span of FF_TEMPLATE_VARIANTS entries per plan, one span of
+ * plans per generation. The builder and the publisher must agree, so both use
+ * this macro rather than repeating the arithmetic. */
+#define FF_TEMPLATE_KEY(gen, plan, variant) \
+    ((((gen) * FF_TEMPLATE_PLAN_COUNT + (plan)) * FF_TEMPLATE_VARIANTS) + (variant))
 #define FF_INTERFACES 8
 #define FF_NS 1000000000ULL
 #define FF_REQUEST_NS (1 * FF_NS)
@@ -44,9 +50,10 @@ struct ff_config {
     __u32 strip_tfo, tcp_batches, udp_both, udp_packets;
     __u32 udp_idle, ttl, repeat, estimate_hops;
     __u32 percent, rate, burst, allow_private;
-    /* A connection whose local or remote port matches ports[i], i < port_count,
-     * uses the second TCP template (slot 1). port_count 0 disables it. */
-    __u32 ports[FF_HTTPS_PORTS_MAX], port_count;
+    /* Enabled TCP payload rules, in the order the rotation visits them. A
+     * connection is pinned to one of them for its lifetime; disabled rules are
+     * left out so the datapath can never pick an unpublished plan. */
+    __u32 rule_map[FF_TCP_RULES_MAX], rule_count;
     /* Pre-rendered variants per plan index. The observer masks its random pick
      * with this value so the builder always asks for a published key; a plan
      * whose template has no randomised bytes is published with one variant. */

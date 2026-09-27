@@ -7,7 +7,9 @@
 #include <bpf/bpf_endian.h>
 #include "abi.h"
 struct ff_flow {
-    __u32 reserved;
+    /* Payload rule pinned when the flow state is created; every fake of this
+     * connection uses it, so one flow never mixes two payload shapes. */
+    __u32 rule;
     __u32 syn_seq, syn_bytes, active, stopped, batches, packets, outbound, remote_ttl;
     __u64 seen, emitted;
 };
@@ -35,10 +37,11 @@ MAP(configs,BPF_MAP_TYPE_HASH,__u32,struct ff_config,16);
 MAP(leases,BPF_MAP_TYPE_ARRAY,__u32,struct ff_lease,1);
 MAP(interfaces,BPF_MAP_TYPE_HASH,__u32,struct ff_interface,FF_INTERFACES);
 /* Holds plan * variant keys per generation. A generation publishes at most
- * 3 plans * FF_TEMPLATE_VARIANTS = 96 entries, and publish() keeps the active
- * and the previous generation while inserting the next, so 3 * 96 = 288 are
- * live at the peak; 320 leaves headroom without a large preallocation. */
-MAP(templates,BPF_MAP_TYPE_HASH,__u32,struct ff_template,320);
+ * FF_TEMPLATE_PLAN_COUNT * FF_TEMPLATE_VARIANTS = 4 * 32 = 128 entries, and
+ * publish() keeps the active and the previous generation while inserting the
+ * next, so 4 * 128 = 384 are live at the peak; 448 leaves headroom without a
+ * large preallocation. */
+MAP(templates,BPF_MAP_TYPE_HASH,__u32,struct ff_template,448);
 MAP(tcp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 MAP(udp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 /* LRU maps cannot embed bpf_spin_lock. A stable key-derived array lock guards
@@ -46,6 +49,8 @@ MAP(udp_flows,BPF_MAP_TYPE_LRU_HASH,struct ff_key,struct ff_flow,8192);
 MAP(flow_locks,BPF_MAP_TYPE_ARRAY,__u32,struct ff_lock,1024);
 MAP(requests,BPF_MAP_TYPE_HASH,__u64,struct ff_request,256);
 MAP(sequence,BPF_MAP_TYPE_ARRAY,__u32,__u64,1);
+/* Round-robin cursor for pinning new connections to a payload rule. */
+MAP(rotation,BPF_MAP_TYPE_ARRAY,__u32,__u64,1);
 MAP(budgets,BPF_MAP_TYPE_ARRAY,__u32,struct ff_budget,FF_INTERFACES);
 MAP(stats,BPF_MAP_TYPE_PERCPU_ARRAY,__u32,__u64,FF_STATS_MAX);
 static __always_inline void stat(__u32 id) {

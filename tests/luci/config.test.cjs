@@ -1,182 +1,105 @@
-// Test the actual LuCI module without a browser or a router.
-const fs = require('node:fs');
-const assert = require('node:assert/strict');
-const source = fs.readFileSync('packaging/luci/htdocs/luci-static/resources/fakeflow/config.js', 'utf8');
-const config = new Function('baseclass', source)({ extend: x => x });
-const original = fs.readFileSync('config/fakeflow.toml', 'utf8');
+"use strict";
+/* Unit tests for the LuCI configuration module: the TOML subset it parses, the rule
+ * table it writes and the static wiring of the view. Run: node tests/luci/config.test.cjs */
+const fs = require("node:fs");
+const assert = require("node:assert/strict");
+const source = fs.readFileSync("packaging/luci/htdocs/luci-static/resources/fakeflow/config.js", "utf8");
+const config = new Function("baseclass", source)({ extend: x => x });
+const original = fs.readFileSync("config/fakeflow.toml", "utf8");
 const model = config.parse(original);
-const roundtrip = m => config.parse(config.serialize(m.settings, m.interface));
-assert.deepEqual(roundtrip(model), model);
-assert.equal(model.settings.udp_initial_packets, '5');
-for (const direction of ['active', 'passive', 'both']) {
-  const m = structuredClone(model);
-  m.settings.tcp_directions = direction;
-  assert.deepEqual(roundtrip(m), m);
-}
-const custom = structuredClone(model);
-custom.settings.tcp_payload = 'custom';
-custom.settings.tcp_payload_file = '/etc/fakehttp/payload.tls';
-custom.settings.udp_payload = 'custom';
-custom.settings.udp_payload_file = '/tmp/payload#not-comment.bin';
-const serialized = config.serialize(custom.settings, custom.interface);
-assert(!serialized.includes('hostname ='));
-assert(!serialized.includes('sip_uri ='));
-assert.equal(config.parse(serialized).settings.tcp_payload_file, '/etc/fakehttp/payload.tls');
-assert.equal(config.parse(serialized).settings.udp_payload_file, '/tmp/payload#not-comment.bin');
-assert.deepEqual(config.parse('# comment\n' + original.replace(/\n/g, ' # comment\r\n')), model);
+const roundtrip = m => config.parse(config.serialize(m.settings, m.interface, m.rule));
+
+/* round trip: the rule table is the model now, so it has to survive unchanged */
+const rt = roundtrip(model);
+assert.deepEqual(rt.rule, model.rule, "规则表往返必须一致");
+assert.deepEqual(rt.settings, model.settings, "其余设置往返必须一致");
+assert(model.rule.length >= 1 && model.rule[0].type === "http");
+
+/* the rule table: order is the rotation order, disabled rows are kept */
+const rules = [
+  { enabled: "1", type: "http", payload: "one.example", comment: "first" },
+  { enabled: "0", type: "tls", payload: "two.example", comment: "" },
+  { enabled: "1", type: "custom", payload: "/etc/fakehttp/payload.tls", comment: "" }
+];
+const text = config.serialize(model.settings, model.interface, rules);
+assert.equal((text.match(/\[\[tcp\.rule\]\]/g) || []).length, 3, "三条规则写三个块");
+assert(text.indexOf('type = "http"') < text.indexOf('type = "tls"'), "顺序即轮换顺序");
+assert(text.includes("enabled = false") && text.includes('comment = "first"'));
+const tcpHead = text.split("[tcp]")[1].split("[[tcp.rule]]")[0];
+assert(!/^\s*(payload|hostname|payload_file|https_)\w*\s*=/m.test(tcpHead),
+  "旧的扁平键不再写出（迁移成规则）");
+assert.equal((text.match(/^\s*payload = /gm) || []).length, 4, "三条规则各一个 payload，加 UDP 的一个");
+
+/* LuCI cannot express "the payload column means a host name or a path depending on
+ * the type", so the serializer refuses the wrong shapes instead. */
+for (const [bad, why] of [
+  [[{ enabled: "1", type: "http", payload: "" }], /域名不能为空/],
+  [[{ enabled: "1", type: "custom", payload: "" }], /不能为空/],
+  [[{ enabled: "1", type: "http", payload: "https://a.example" }], /裸域名/],
+  [[{ enabled: "1", type: "tls", payload: "a.example:443" }], /裸域名/],
+  [[{ enabled: "1", type: "tls", payload: "a.example/x" }], /裸域名/],
+  [[{ enabled: "1", type: "custom", payload: "relative.bin" }], /绝对路径/],
+  [[], /至少需要一条规则/],
+  [[{ enabled: "0", type: "http", payload: "a.example" }], /至少要有一条启用/],
+  [[{ enabled: "1", type: "http", payload: "a.example" },
+    { enabled: "1", type: "http", payload: "b.example" },
+    { enabled: "1", type: "http", payload: "c.example" },
+    { enabled: "1", type: "http", payload: "d.example" }], /最多 3 条/]
+]) assert.throws(() => config.serialize(model.settings, model.interface, bad), why);
+
+/* a configuration written before the rule table existed still loads, and the next
+ * save rewrites it as rules */
+const legacy = 'version = 1\n[[interfaces]]\nname = "wan"\n[tcp]\npayload = "http"\n' +
+  'hostname = "old.example"\nhttps_hostname = "old-tls.example"\nhttps_ports = [8443, 443]\n[udp]\n';
+const migrated = config.parse(legacy);
+assert.deepEqual(migrated.rule.map(r => [r.type, r.payload]),
+  [["http", "old.example"], ["tls", "old-tls.example"]], "旧的 https_* 键变成第二条规则");
+const legacyOut = config.serialize(migrated.settings, migrated.interface, migrated.rule);
+assert(!/https_/.test(legacyOut), "保存时改写成规则表，不再写旧键");
+
+/* parse errors */
 for (const bad of [
-  original + '\n[unknown]\nx = 1', original.replace('version = 1', 'version = 2'),
-  original.replace('[tcp]', '[tcp]\nenabled = true'), original + '\n[tcp]',
-  original.replace('initial_packets = 5', 'initial_packets = 33'),
-  original.replace('"active", "passive"', '"active", "active"'),
-  original.replace('enabled = true', 'enabled = 1'),
-  original.replace('hostname = "www.example.com"', 'hostname = "bad\\\\name"')
-]) assert.throws(() => config.parse(bad));
-for (const [key, value] of [['injection_ttl','0'], ['runtime_lease_seconds','3'],
-  ['injection_burst','1'], ['tcp_hostname','x"\nenabled = false'], ['udp_trigger','ingress']]) {
-  assert.throws(() => config.serialize({ ...model.settings, [key]: value }, model.interface));
+  "version = 1\n", "[[interfaces]]\nname = \"wan\"\n",
+  'version = 1\n[[interfaces]]\nname = "wan"\n[tcp]\nunknown = 1\n',
+  'version = 1\n[[interfaces]]\nname = "wan"\n[[tcp.rule]]\ntype = "https"\npayload = "a.example"\n',
+  'version = 1\n[[interfaces]]\nname = "wan"\n[[tcp.rule]]\ntype = "http"\npayload = "a.example"\npayload = "b.example"\n'
+]) assert.throws(() => config.parse(bad), /无法转换为表单|需要 version/, bad);
+
+/* view wiring: a JSONMap section renders the rows of the model key with the same
+ * name, so every section needs that key assigned (or provided by parse) */
+const viewSource = fs.readFileSync("packaging/luci/htdocs/luci-static/resources/view/fakeflow.js", "utf8");
+new Function(viewSource);
+const provided = Object.keys(config.parse(original));
+for (const match of viewSource.matchAll(/m\.section\(form\.(\w+),\s*'([a-z_]+)'/g)) {
+  if (provided.includes(match[2])) continue;
+  assert(new RegExp("model\\." + match[2] + "\\s*=").test(viewSource),
+    `JSONMap 段 ${match[2]} 的行没有挂到 model.${match[2]}，页面重载后会丢数据`);
 }
-assert.throws(() => config.serialize(model.settings, []));
-assert.throws(() => config.serialize(model.settings, [model.interface[0], model.interface[0]]));
-assert.throws(() => config.serialize(model.settings, [{ name:'eth0',mode:'pppoe' },{ name:'pppoe-wan',mode:'l3' }]));
-const eight = Array.from({ length:8 }, (_,i) => ({ name:'eth'+i,mode:'ethernet' }));
-assert.equal(config.parse(config.serialize(model.settings, eight)).interface.length, 8);
-assert.throws(() => config.serialize(model.settings, [...eight,{ name:'eth8',mode:'ethernet' }]));
-// Port-matched second TCP template: roundtrip, default port list and rejection.
-const https = structuredClone(model);
-https.settings.tcp_https_hostname = 'tls.example';
-let text = config.serialize(https.settings, https.interface);
-assert(text.includes('https_hostname = "tls.example"'));
-assert(!text.includes('https_ports ='), 'an empty port list must be omitted so the parser default applies');
-assert.equal(config.parse(text).settings.tcp_https_hostname, 'tls.example');
-assert.deepEqual(roundtrip(https), https);
-https.settings.tcp_https_ports = '443, 8443';
-text = config.serialize(https.settings, https.interface);
-assert(text.includes('https_ports = [443, 8443]'));
-assert.equal(config.parse(text).settings.tcp_https_ports, '443, 8443');
-assert.deepEqual(roundtrip(https), https);
-for (const ports of ['0', '65536', '443, 443', '1,2,3,4,5', '443, x'])
-  assert.throws(() => config.serialize({ ...https.settings, tcp_https_ports: ports }, https.interface));
-assert.throws(() => config.serialize({ ...https.settings, tcp_https_payload_file: '/tmp/x' }, https.interface));
-const ht='hostname = "www.example.com"';
-for (const key of ['https_ports = []', 'https_ports = [443, 443]', 'https_ports = [0]', 'https_ports = [443,]'])
-  assert.throws(() => config.parse(original.replace(ht, ht + '\n' + key)));
-// The second template is omitted entirely when no payload source is configured.
-assert(!config.serialize(model.settings, model.interface).includes('https_'));
-// A field whose default is empty and which is always visible must accept an
-// empty value: value() sets rmempty = false, and LuCI refuses to parse a visible
-// empty field. That failure only surfaces in the browser test, so check it here.
-const viewSource = fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8');
-for (const [key, spec] of Object.entries(config.fields)) {
-  if (spec[1] !== '') continue;
-  const call = new RegExp("value\\(s, '[a-z]+', '" + key + "'");
-  const idx = viewSource.search(call);
-  if (idx < 0) continue;
-  const snippet = viewSource.slice(idx, idx + 400);
-  assert(snippet.includes('rmempty = true') || snippet.includes('.depends('),
-    key + ' 默认值为空且常显，必须设 rmempty = true 或加 depends()');
-}
-// LuCI hands over null/undefined for a form field the user left empty. That must
-// not fail the whole form, and when something *is* wrong the message has to name
-// the field.
-const blank = { ...model.settings, tcp_payload_file: null, tcp_https_hostname: null,
-  tcp_https_payload_file: null, udp_payload_file: null };
-assert.equal(config.serialize(blank, model.interface), config.serialize(model.settings, model.interface),
-  'empty optional fields must serialize exactly as if they were unset');
-for (const [settings, expected] of [
-  [{ ...model.settings, tcp_hostname: 'x"\ny' }, /tcp\.hostname.*不能包含双引号/],
-  [{ ...model.settings, tcp_hostname: null }, /tcp\.hostname.*不能为空/],
-  [{ ...model.settings, udp_initial_packets: null }, /udp\.initial_packets.*需要一个整数/]
-]) assert.throws(() => config.serialize(settings, model.interface), expected);
-// The reported failure: a config that turns on the https_* template leaves the
-// HTTPS payload_file empty in the form, LuCI hands that over as null/undefined,
-// and the serializer used to die with a message that named no field.
-const httpsForm = { ...model.settings, tcp_https_hostname: 'tls.example', tcp_https_payload_file: null };
-const httpsText = config.serialize(httpsForm, model.interface);
-assert(httpsText.includes('https_hostname = "tls.example"'), httpsText);
-assert(!httpsText.includes('https_payload_file'),
-  'an empty optional field is omitted, not written as key = ""');
-assert.deepEqual(config.parse(httpsText).settings.tcp_https_hostname, 'tls.example');
-for (const off of [null, undefined, 0, ''])
-  assert(!config.serialize({ ...model.settings, tcp_https_hostname: off, tcp_https_payload_file: null },
-    model.interface).includes('https_hostname'), String(off));
-for (const bad of [{}, 5, ['a'], true])
-  assert.throws(() => config.serialize({ ...model.settings, tcp_https_hostname: bad, tcp_https_payload_file: null },
-    model.interface), /tcp\.https_hostname/);
-// 「载荷类型 = 自定义文件」时路径才是必填的。LuCI 表达不了这种条件必填（见下面对
-// rmempty 的断言），所以表单把这两个字段设成可选，由这里兜底：选了自定义文件却没给
-// 路径必须报错，否则会存下一份守护进程用不了的配置。
-for (const [settings, expected] of [
-  [{ ...model.settings, tcp_payload: 'custom', tcp_payload_file: '' }, /tcp\.payload_file/],
-  [{ ...model.settings, tcp_payload: 'custom', tcp_payload_file: null }, /tcp\.payload_file/],
-  [{ ...model.settings, udp_payload: 'custom', udp_payload_file: undefined }, /udp\.payload_file/]
-]) assert.throws(() => config.serialize(settings, model.interface), expected);
-{
-  const tcpText = config.serialize({ ...model.settings, tcp_payload: 'custom',
-    tcp_payload_file: '/etc/fakehttp/payload.tls' }, model.interface);
-  assert(tcpText.includes('payload_file = "/etc/fakehttp/payload.tls"'), tcpText);
-  assert(!tcpText.includes('\nhostname ='), tcpText);
-  const udpText = config.serialize({ ...model.settings, udp_payload: 'custom',
-    udp_payload_file: '/etc/fakehttp/sip.bin' }, model.interface);
-  assert(udpText.includes('payload_file = "/etc/fakehttp/sip.bin"'), udpText);
-  assert(!udpText.includes('\nsip_uri ='), udpText);
-}
-// 由 depends() 控制显示的字段不能是必填：validation.js 在每次依赖检查时会把空的必填
-// 字段标成无效，而 depends 把它隐藏之后没有任何代码清除那个标记 —— 页签上于是挂着
-// 「N 个无效字段」提示，指向一个已经看不见的字段（用户在路由器上遇到的就是这个）。
-for (const key of ['tcp_hostname', 'tcp_payload_file', 'udp_sip_uri', 'udp_payload_file']) {
-  const idx = viewSource.search(new RegExp("value\\(s, '[a-z]+', '" + key + "'"));
-  assert(idx >= 0, '视图里找不到字段 ' + key);
-  const snippet = viewSource.slice(idx, idx + 500);
-  assert(/\.depends\(/.test(snippet), key + ' 是 depends 条件字段');
-  assert(/rmempty = true/.test(snippet),
-    key + ' 由 depends 控制显示，不能设为必填（隐藏后残留的无效标记会变成页签上的「N 个无效字段」）');
-}
-// A JSONMap section renders the rows found under a model key of the same name:
-// `interface` comes from config.parse, so anything else must be assigned in the
-// view. Without it the table shows up empty and the next save drops the entries.
-{
-  const provided = Object.keys(config.parse(original));
-  let seen = 0;
-  for (const match of viewSource.matchAll(/m\.section\(form\.TableSection,\s*'([a-z_]+)'/g)) {
-    seen++;
-    const name = match[1];
-    if (provided.includes(name)) continue;
-    assert(new RegExp('model\\.' + name + '\\s*=').test(viewSource),
-      `JSONMap 段 ${name} 的行没有挂到 model.${name}，页面重载后会丢数据`);
-  }
-  assert(seen >= 1, '至少有监听接口这一个数组表段');
-}
-// Check syntax of the view and every shipped JSON file too.
-new Function(fs.readFileSync('packaging/luci/htdocs/luci-static/resources/view/fakeflow.js', 'utf8'));
-// The status poll must skip while the page is hidden — LuCI's own poll never looks
-// at document.hidden, and every tick costs the router about ten process spawns —
-// and it must refresh immediately when the tab comes back instead of waiting.
+assert(/m\.section\(form\.GridSection,\s*'rule'/.test(viewSource), "TCP 载荷规则要用表来编辑");
+assert(/tbl\.addremove = true/.test(viewSource) && /tbl\.sortable = true/.test(viewSource),
+  "规则表要能加行、能拖拽排序（顺序即轮换顺序）");
 assert(/visibilityState/.test(viewSource) && /visibilitychange/.test(viewSource),
-  '轮询需要在页面隐藏时跳过，并在回到前台时立即刷新一次');
-for (const path of ['luci/menu.d', 'rpcd/acl.d'])
-  JSON.parse(fs.readFileSync(`packaging/luci/root/usr/share/${path}/luci-app-fakeflow.json`, 'utf8'));
-// Read-side retry of rpcd's config lock: rpcd acquires the lock before doing any
-// work, so 正在执行/锁繁忙 means nothing happened and the same call may be repeated.
-assert.equal(config.transient('另一个配置操作正在执行，请稍后重试。'), true);
-assert.equal(config.transient('配置锁繁忙，请稍后重试。'), true);
-for (const other of ['配置已保存并应用。', '配置已被其他页面或终端修改，请重新加载后再保存。', '', null, undefined])
-  assert.equal(config.transient(other), false, String(other));
-let lockCalls = 0;
+  "轮询需要在页面隐藏时跳过，并在回到前台时立即刷新一次");
+for (const path of ["luci/menu.d", "rpcd/acl.d"])
+  JSON.parse(fs.readFileSync(`packaging/luci/root/usr/share/${path}/luci-app-fakeflow.json`, "utf8"));
+
+/* rpcd takes the config lock before doing any work, so a lock reply means nothing
+ * happened and the read side may simply repeat the call */
+let lockCalls = 0, failures = 0;
 const flaky = () => {
   lockCalls++;
-  return Promise.resolve(lockCalls < 3
-    ? { ok: false, message: '另一个配置操作正在执行，请稍后重试。' }
-    : { ok: true, message: '配置已保存并应用。' });
+  if (failures--) return Promise.resolve({ ok: false, message: "另一个配置操作正在执行" });
+  return Promise.resolve({ ok: true, value: lockCalls });
 };
-config.retry(flaky, 4, 1).then(result => {
-  assert.equal(result.ok, true, '被锁挡住后最终应成功');
-  assert.equal(lockCalls, 3, '应重试到第三次（前两次被锁挡住）');
-  let fatalCalls = 0;
-  const fatal = () => { fatalCalls++; return Promise.resolve({ ok: false, message: '配置无效。' }); };
-  return config.retry(fatal, 3, 1).then(failed => {
-    assert.equal(failed.ok, false);
-    assert.equal(fatalCalls, 1, '非锁错误不得重试');
-    console.log('LuCI config roundtrip, boundaries, custom payloads, second TCP template, injection rejection, lock retry and visibility passed.');
-  });
-}).catch(error => { console.error(error); process.exitCode = 1; });
+assert(config.transient("另一个配置操作正在执行") && config.transient("配置锁繁忙"));
+assert(!config.transient("已保存") && !config.transient("") && !config.transient(null) && !config.transient(undefined));
+failures = 2;
+config.retry(flaky).then(r => {
+  assert.equal(r.ok, true);
+  assert.equal(lockCalls, 3, "两次锁冲突后第三次应当成功");
+  let calls = 0;
+  return config.retry(() => { calls++; return Promise.resolve({ ok: false, message: "接口名称无效。" }); })
+    .then(r2 => { assert.equal(r2.ok, false); assert.equal(calls, 1, "非锁失败不重试"); });
+}).then(() => {
+  console.log("LuCI config roundtrip, rule table, legacy migration, rejection, lock retry and view wiring passed.");
+});

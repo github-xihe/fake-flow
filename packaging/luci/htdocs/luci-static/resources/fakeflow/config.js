@@ -4,10 +4,13 @@
 // The supported TOML subset matches ebpf/user/config.c. Never evaluate input.
 var fields = {
 	tcp_enabled: ['bool', true], tcp_directions: ['directions', 'both'],
-	tcp_payload: ['enum', 'http', ['http', 'tls', 'custom']],
-	tcp_hostname: ['string', 'www.example.com'], tcp_payload_file: ['string', ''],
-	tcp_https_hostname: ['string', ''], tcp_https_payload_file: ['string', ''],
-	tcp_https_ports: ['ports', ''],
+	/* Retired single-template keys. They are still read (an existing router
+	 * configuration keeps loading and is rewritten as rules on the next save) but
+	 * never written back; the rule table below is the model now. */
+	tcp_payload: ['enum', 'http', ['http', 'tls', 'custom'], 'retired'],
+	tcp_hostname: ['string', 'www.example.com', 'retired'], tcp_payload_file: ['string', '', 'retired'],
+	tcp_https_hostname: ['string', '', 'retired'], tcp_https_payload_file: ['string', '', 'retired'],
+	tcp_https_ports: ['ports', '', 'retired'],
 	tcp_tfo: ['enum', 'strip-syn', ['strip-syn', 'preserve']], tcp_max_batches: ['number', 3, 1, 32],
 	udp_enabled: ['bool', true], udp_trigger: ['enum', 'egress', ['egress', 'both']],
 	udp_payload: ['enum', 'sip', ['sip', 'custom']], udp_sip_uri: ['string', 'sip:service@example.com'],
@@ -72,8 +75,11 @@ function port_list(value, what) {
 	if (new Set(nums).size !== nums.length) throw new Error(what + '：端口重复。');
 	return nums;
 }
+/* One TCP payload rule. `payload` is a host name for type http/tls and a file
+ * path for type custom, which is the daemon's own reading of the field. */
+function new_rule() { return { enabled: '1', type: 'http', payload: '', comment: '' }; }
 function parse(text) {
-	var settings = defaults(), interfaces = [], section = '', seen = {}, sections = {}, version = false;
+	var settings = defaults(), interfaces = [], rules = [], section = '', seen = {}, sections = {}, version = false;
 	text.split(/\r?\n/).forEach(function(raw, index) {
 		var quoted = false, line = '';
 		for (var i = 0; i < raw.length; i++) {
@@ -87,6 +93,9 @@ function parse(text) {
 		if (line === '[[interfaces]]') {
 			section = 'interfaces'; interfaces.push({ name: '', mode: 'ethernet' }); return;
 		}
+		if (line === '[[tcp.rule]]') {
+			section = 'tcp.rule'; rules.push(new_rule()); return;
+		}
 		if (/^\[(tcp|udp|injection|runtime)\]$/.test(line)) {
 			section = line.slice(1, -1);
 			if (sections[section]) fail();
@@ -95,12 +104,16 @@ function parse(text) {
 		var match = line.match(/^([a-z_]+)\s*=\s*(.+)$/);
 		if (!match) fail();
 		var key = match[1], value = match[2];
-		var repeat = section === 'interfaces' ? interfaces.length : 0;
+		var repeat = section === 'interfaces' ? interfaces.length : section === 'tcp.rule' ? rules.length : 0;
 		var id = section + '.' + repeat + '.' + key;
 		if (seen[id]) fail();
 		seen[id] = true;
 		if (!section && key === 'version' && value === '1') { version = true; return; }
-		var spec = section === 'interfaces' && (key === 'name' || key === 'mode') ? ['string'] : fields[section + '_' + key];
+		var spec = section === 'interfaces' && (key === 'name' || key === 'mode') ? ['string'] :
+			section === 'tcp.rule' && key === 'enabled' ? ['bool'] :
+			section === 'tcp.rule' && key === 'type' ? ['enum', 'http', ['http', 'tls', 'custom']] :
+			section === 'tcp.rule' && (key === 'payload' || key === 'comment') ? ['string'] :
+			fields[section + '_' + key];
 		if (!spec) fail();
 		var parsed;
 		if (spec[0] === 'bool') {
@@ -129,14 +142,79 @@ function parse(text) {
 			if (spec[0] === 'enum' && spec[2].indexOf(parsed) < 0) fail();
 		}
 		if (section === 'interfaces') interfaces[interfaces.length - 1][key] = parsed;
+		else if (section === 'tcp.rule') rules[rules.length - 1][key] = parsed;
 		else settings[section + '_' + key] = parsed;
 	});
 	if (!version || !interfaces.length) throw new Error('需要 version = 1 和至少一个接口。');
+		/* A configuration written before the rule table existed carries the payload in
+	 * the flat keys; turn it into rules so the form shows what the daemon runs. */
+	if (!rules.length) {
+		var legacy = new_rule();
+		legacy.type = settings.tcp_payload === 'custom' ? 'custom' : settings.tcp_payload === 'tls' ? 'tls' : 'http';
+		legacy.payload = legacy.type === 'custom' ? settings.tcp_payload_file : settings.tcp_hostname;
+		rules.push(legacy);
+		if (settings.tcp_https_hostname || settings.tcp_https_payload_file) {
+			var second = new_rule();
+			second.type = settings.tcp_https_payload_file ? 'custom' : 'tls';
+			second.payload = settings.tcp_https_payload_file || settings.tcp_https_hostname;
+			rules.push(second);
+		}
+	}
 	// Validate names and combinations before allowing a form rewrite.
-	serialize(settings, interfaces);
-	return { settings: settings, interface: interfaces };
+	serialize(settings, interfaces, rules);
+	return { settings: settings, interface: interfaces, rule: rules };
 }
-function serialize(settings, interfaces) {
+/* A bare host name: no scheme, no port, no path. The daemon embeds this string
+ * verbatim in the Host header or the TLS SNI, so "http://host/" or "host:443"
+ * would read as forged traffic rather than as a disguise. */
+function rule_host(value, what) {
+	if (!value) throw new Error(what + '：载荷不能为空。');
+	if (/[\/: ]/.test(value)) throw new Error(what + '：域名要写成裸域名（不要协议、端口或路径）。');
+	return quote(value, what);
+}
+function rule_list(rules) {
+	if (!rules || !rules.length) throw new Error('TCP 规则表至少需要一条规则。');
+	if (rules.length > 3) throw new Error('TCP 规则表最多 3 条规则。');
+	var lines = [], enabled = 0, index = 0;
+	rules.forEach(function(r) {
+		index++;
+		var where = 'tcp.rule #' + index;
+		var type = r.type === 'tls' ? 'tls' : r.type === 'custom' ? 'custom' : 'http';
+		var on = r.enabled === '1' || r.enabled === true || r.enabled === 1;
+		if (on) enabled++;
+		if (!String(r.payload === undefined || r.payload === null ? '' : r.payload).length)
+			throw new Error(where + '：' + (type === 'custom' ? '载荷文件' : '域名') + '不能为空。');
+		if (type === 'custom' && String(r.payload)[0] !== '/')
+			throw new Error(where + '：载荷文件要写绝对路径，例如 /etc/fakehttp/payload.tls。');
+		var value = type === 'custom'
+			? '\"' + String(r.payload) + '\"'
+			: rule_host(String(r.payload), where);
+		lines.push('', '[[tcp.rule]]', 'type = \"' + type + '\"', 'payload = ' + value,
+			'enabled = ' + (on ? 'true' : 'false'));
+		if (r.comment) lines.push('comment = ' + quote(String(r.comment), where));
+	});
+	if (!enabled) throw new Error('TCP 规则表至少要有一条启用的规则。');
+	return lines;
+}
+function serialize(settings, interfaces, rules) {
+	/* An empty rule table would produce a configuration the daemon rejects, so it is
+	 * refused here rather than written out and reported by the device. */
+	if (!rules || !rules.length) throw new Error('TCP 规则表至少需要一条规则。');
+	/* Older callers (and a form that somehow carries no rule rows) still pass two
+	 * arguments; derive the rules from the retired flat keys so the output is a valid
+	 * rule table either way. */
+	if (!rules || !rules.length) {
+		var derived = new_rule();
+		derived.type = settings.tcp_payload === 'custom' ? 'custom' : settings.tcp_payload === 'tls' ? 'tls' : 'http';
+		derived.payload = derived.type === 'custom' ? settings.tcp_payload_file : settings.tcp_hostname;
+		rules = [derived];
+		if (settings.tcp_https_hostname || settings.tcp_https_payload_file) {
+			var more = new_rule();
+			more.type = settings.tcp_https_payload_file ? 'custom' : 'tls';
+			more.payload = settings.tcp_https_payload_file || settings.tcp_https_hostname;
+			rules.push(more);
+		}
+	}
 	if (!interfaces.length || interfaces.length > 8) throw new Error('需要配置 1–8 个接口。');
 	var names = Object.create(null), modes = {}, lines = ['version = 1'];
 	interfaces.forEach(function(d) {
@@ -157,8 +235,13 @@ function serialize(settings, interfaces) {
 		throw new Error('udp.payload_file: 载荷类型选择「自定义文件」时必须填写载荷文件路径。');
 	['tcp', 'udp', 'injection', 'runtime'].forEach(function(section) {
 		lines.push('', '[' + section + ']');
+		/* The rule table replaces the retired flat TCP payload keys, so those are
+		 * parsed but never written again; that is also what migrates a router's
+		 * existing configuration on the next save. */
+		var table = rules && rules.length ? rules : [];
 		Object.keys(fields).forEach(function(id) {
 			if (id.indexOf(section + '_') !== 0) return;
+			if (fields[id][fields[id].length - 1] === 'retired') return;   /* enum specs carry choices at [2] */
 			var key = id.slice(section.length + 1), spec = fields[id], value = settings[id];
 			/* Complain in TOML terms (`tcp.https_hostname`), which is what the user
 			 * sees in the file and in the TOML preview. */
@@ -203,8 +286,9 @@ function serialize(settings, interfaces) {
 			}
 			lines.push(key + ' = ' + value);
 		});
+		if (section === 'tcp' && table.length) lines = lines.concat(rule_list(table));
 	});
 	return lines.join('\n') + '\n';
 }
-return baseclass.extend({ fields: fields, transient: transient, retry: retry,
+return baseclass.extend({ fields: fields, transient: transient, retry: retry, new_rule: new_rule,
 	defaults: defaults, parse: parse, serialize: serialize });

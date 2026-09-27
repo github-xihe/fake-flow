@@ -99,19 +99,19 @@ static int http(struct ff_template *t,const char *hostname) {
     if(n<0 || n>=FF_PAYLOAD_MAX) return -1;
     t->len=n;return 0;
 }
-/* Render the second TCP template. A payload file wins over the generated
- * ClientHello, so a slot with both is rejected during parsing instead of here.
- * Returns -1 for an unreadable or oversized payload file and -2 for anything else,
- * which is the distinction the caller turns into its two error messages. */
-static int slot_template(struct ff_tcp_slot *s,struct ff_plan *plan) {
-    if(*s->file) {
-        if(custom(s->file,&s->tpl)) return -1;
+/* Render one TCP payload rule into its template. Returns -1 for an unreadable or
+ * oversized payload file and -2 for anything else, which is the distinction the
+ * caller turns into its two error messages. */
+static int rule_template(struct ff_rule *r,struct ff_plan *plan) {
+    if(!strcmp(r->type,"custom")) return custom(r->file,&r->tpl)?-1:0;
+    if(!safe_text(r->hostname)) return -2;
+    if(!strcmp(r->type,"http")) return http(&r->tpl,r->hostname)?-2:0;
+    if(!strcmp(r->type,"tls")) {
+        if(tls(&r->tpl,r->hostname)) return -2;
+        plan->kind=FF_VARIANT_RENDER;plan->variants=FF_TEMPLATE_VARIANTS;
         return 0;
     }
-    if(!safe_text(s->hostname)) return -2;
-    if(tls(&s->tpl,s->hostname)) return -2;
-    plan->kind=FF_VARIANT_RENDER;plan->variants=FF_TEMPLATE_VARIANTS;
-    return 0;
+    return -2;
 }
 /* Record where the randomised identity fields landed, so PATCH variants can be
  * produced without re-parsing the datagram. Requiring the terminator and
@@ -139,14 +139,13 @@ static int locate(struct ff_plan *plan,const struct ff_template *t) {
 }
 int ff_templates(struct ff_options *o,char *error,size_t cap) {
     int n=0;
-    struct ff_plan *tcp0=&o->plan[FF_TEMPLATE_PLAN(0,0)];
-    struct ff_plan *udp0=&o->plan[FF_TEMPLATE_PLAN(1,0)];
+    struct ff_plan *udp0=&o->plan[FF_TEMPLATE_PLAN_UDP];
     memset(&o->tcp_template,0,sizeof(o->tcp_template));
     memset(&o->udp_template,0,sizeof(o->udp_template));
     memset(o->plan,0,sizeof(o->plan));
-    /* o->slots is deliberately not cleared here: the parser filled each slot's
-     * hostname/file and this function only renders them. Callers must pass a
-     * zeroed struct (ff_config_read does, which is also what keeps a slot the
+    /* o->rules is deliberately not cleared here: the parser filled each rule's
+     * type/hostname/file and this function only renders them. Callers must pass
+     * a zeroed struct (ff_config_read does, which is also what keeps a rule the
      * configuration did not define empty and therefore unpublished). */
     /* A template without randomised bytes is published once; the others get the
      * full pre-rendered set the observer picks from. */
@@ -154,33 +153,21 @@ int ff_templates(struct ff_options *o,char *error,size_t cap) {
         o->plan[p].kind=FF_VARIANT_SAME;o->plan[p].variants=1;
     }
 
-    if(!strcmp(o->tcp_payload,"custom")) {
-        if(custom(o->tcp_file,&o->tcp_template)) goto bad_file;
-    } else {
-        if(*o->tcp_file || !safe_text(o->hostname)) goto bad;
-        if(!strcmp(o->tcp_payload,"http")) {
-            if(http(&o->tcp_template,o->hostname)) goto bad;
-        } else if(!strcmp(o->tcp_payload,"tls")) {
-            if(tls(&o->tcp_template,o->hostname)) goto bad;
-            tcp0->kind=FF_VARIANT_RENDER;tcp0->variants=FF_TEMPLATE_VARIANTS;
-        } else goto bad;
-    }
-
-    /* Slot 0 mirrors the primary template, so the publish loop and the variant
-     * renderer treat both slots the same way instead of special-casing the
-     * primary. */
-    o->slots[0].tpl=o->tcp_template;
-    strcpy(o->slots[0].hostname,o->hostname);
-    strcpy(o->slots[0].file,o->tcp_file);
-    /* The second TCP template, when the https_* keys configured one. The parser
-     * already filled its hostname/file and set slot_count, so a template that was
-     * not configured is never rendered (and never published, which is what keeps
-     * its connections on the primary). */
-    for(unsigned s=1;s<=o->slot_count && s<FF_TEMPLATE_SLOTS;s++) {
-        int rc=slot_template(&o->slots[s],&o->plan[FF_TEMPLATE_PLAN(0,s)]);
+    /* TCP payload rules, in configured order with disabled ones left out. The
+     * rule_map is what the datapath rotates over, so it lists exactly the plans
+     * that get published. */
+    o->kernel.rule_count=0;
+    for(unsigned i=0;i<o->rule_count && i<FF_TCP_RULES_MAX;i++) {
+        if(!o->rules[i].enabled) continue;
+        int rc=rule_template(&o->rules[i],&o->plan[i]);
         if(rc==-1) goto bad_file;
         if(rc) goto bad;
+        o->kernel.rule_map[o->kernel.rule_count++]=i;
     }
+    if(!o->kernel.rule_count) goto bad;
+    /* Mirrors the first enabled rule for readers that want "the" TCP template,
+     * which is what `validate` reports and the pre-flight check inspects. */
+    o->tcp_template=o->rules[o->kernel.rule_map[0]].tpl;
 
     if(!strcmp(o->udp_payload,"custom")) {
         if(custom(o->udp_file,&o->udp_template)) goto bad_file;
@@ -224,11 +211,10 @@ int ff_variants(const struct ff_options *o,struct ff_template out[][FF_TEMPLATE_
         const struct ff_plan *p=&o->plan[plan];
         const struct ff_template *base;
         const char *host="";
-        /* Plans 0..FF_TEMPLATE_SLOTS-1 are the TCP slots and slot 0 mirrors the
-         * primary template; UDP publishes only its slot 0. */
-        unsigned slot=plan%FF_TEMPLATE_SLOTS;
-        if(plan<FF_TEMPLATE_SLOTS) {base=&o->slots[slot].tpl;host=o->slots[slot].hostname;}
-        else if(plan==FF_TEMPLATE_PLAN(1,0)) base=&o->udp_template;
+        /* Plans 0..FF_TCP_RULES_MAX-1 are the TCP rules; FF_TEMPLATE_PLAN_UDP is
+         * the single UDP template. */
+        if(plan<FF_TCP_RULES_MAX) {base=&o->rules[plan].tpl;host=o->rules[plan].hostname;}
+        else if(plan==FF_TEMPLATE_PLAN_UDP) base=&o->udp_template;
         else continue;
         unsigned count=p->variants?p->variants:1;
         if(count>n) count=n;

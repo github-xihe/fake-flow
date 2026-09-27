@@ -15,14 +15,17 @@ struct ff_rand_field { __u16 off, bytes; };
  * ranges, and RENDER runs the generator again for a payload whose randomness
  * lives inside the generator (the TLS ClientHello random). */
 enum ff_variant_kind { FF_VARIANT_SAME = 0, FF_VARIANT_PATCH, FF_VARIANT_RENDER };
-/* One TCP template slot. Slot 0 mirrors the primary template after parsing, so
- * the publish loop and the variant renderer treat both slots the same way; slot 1
- * is the second template configured through the https_* keys. */
-struct ff_tcp_slot {
+/* One TCP payload rule. The type decides which field is read (http and tls take
+ * hostname, custom takes file) and how the datagram is rendered. Rules are not
+ * selected by port: a connection is pinned to one of them for its lifetime. */
+struct ff_rule {
+    char type[16], payload[1024];   /* payload is resolved into hostname or file */
     char hostname[254], file[1024];
+    unsigned enabled;
     struct ff_template tpl;
 };
-/* One entry per published template, indexed by FF_TEMPLATE_PLAN(proto, slot). */
+/* One entry per published template: plans 0..FF_TCP_RULES_MAX-1 are the TCP
+ * rules and FF_TEMPLATE_PLAN_UDP is the single UDP template. */
 struct ff_plan {
     unsigned kind, variants, rand_count;
     struct ff_rand_field rand[FF_RAND_FIELDS];
@@ -33,14 +36,13 @@ struct ff_options {
     unsigned device_count, tcp_entries, udp_entries, lease;
     char tcp_payload[16], udp_payload[16], hostname[254], sip_uri[254];
     char tcp_file[1024], udp_file[1024];
-    /* Second TCP template (selected by port). It exists only when
-     * https_hostname or https_file is set; the payload kind is implied by which
-     * of the two was configured. */
-    char https_hostname[254], https_file[1024];
-    /* Indexed by TCP slot: [0] mirrors the primary template, [1] is the second
-     * template. slot_count is how many port-matched slots exist, 0 or 1. */
-    struct ff_tcp_slot slots[FF_TEMPLATE_SLOTS];
-    unsigned slot_count;
+    /* TCP payload rules in configured order; a rule a configuration did not
+     * enable keeps an empty type and is never rendered or published. */
+    struct ff_rule rules[FF_TCP_RULES_MAX];
+    unsigned rule_count;
+    /* Deprecation notice produced while parsing (retired keys), logged by the
+     * daemon and printed by the CLI. Keeps config.c free of the log plumbing. */
+    char warning[192];
     struct ff_template tcp_template, udp_template;
     struct ff_plan plan[FF_TEMPLATE_PLAN_COUNT];
 };

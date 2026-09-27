@@ -68,7 +68,20 @@ static __always_inline int options(struct __sk_buff *skb,struct packet *p,int st
     }
     stat(FF_TFO_STRIPPED);return 0;
 }
-static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,struct ff_config *c,int in,__u64 now,__u32 *ttl) {
+/* Pin a new connection to one payload rule. Called once per flow, when its state
+ * is created, so consecutive connections rotate through the configured rules
+ * while a single connection keeps one payload shape for its whole life. */
+static __always_inline __u32 next_rule(struct ff_config *c) {
+    __u32 z=0,rule;
+    if(!c->rule_count) return 0;
+    __u64 *n=bpf_map_lookup_elem(&rotation,&z);
+    __u32 i=n?(__u32)__sync_fetch_and_add(n,1)%c->rule_count:0;
+    if(i>=FF_TCP_RULES_MAX) i=0;      /* the verifier needs a bounded index */
+    rule=c->rule_map[i];
+    if(rule>=FF_TCP_RULES_MAX) rule=0;
+    return rule;
+}
+static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,struct ff_config *c,int in,__u64 now,__u32 *ttl,__u32 *rule) {
     int syn=(p->flags&0x17)==2, synack=(p->flags&0x17)==0x12;
     struct ff_lock *lock=flow_lock(&p->key);if(!lock)return 0;
     struct ff_flow *f=bpf_map_lookup_elem(&tcp_flows,&p->key);
@@ -80,6 +93,7 @@ static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,st
             struct ff_flow initial={};
             initial.syn_seq=p->seq;initial.syn_bytes=p->bytes;initial.active=!in;
             initial.seen=now;initial.remote_ttl=in?p->ttl:0;initial.stopped=rejected!=0;
+            initial.rule=next_rule(c);
             if(bpf_map_update_elem(&tcp_flows,&p->key,&initial,BPF_NOEXIST)) {
                 f=bpf_map_lookup_elem(&tcp_flows,&p->key);
                 if(!f) stat(FF_MAP_FAILED);
@@ -112,6 +126,8 @@ static __always_inline int tcp_trigger(struct __sk_buff *skb,struct packet *p,st
        f->batches<c->tcp_batches && (!f->batches || now-f->emitted>=200000000ULL)) {
         f->batches++;f->emitted=now;emit=1;
         *ttl=in?p->ttl:f->remote_ttl;
+        __u32 r=f->rule;if(r>=FF_TCP_RULES_MAX) r=0;   /* bounded for the plan */
+        *rule=r;
     }
     bpf_spin_unlock(&lock->lock);
     if(emit) stat(FF_TCP_ELIGIBLE);

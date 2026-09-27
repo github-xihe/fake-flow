@@ -58,34 +58,27 @@ return view.extend({
 			flag(s, 'tcp', 'tcp_enabled', '启用 TCP');
 			select(s, 'tcp', 'tcp_directions', '连接方向', [
 				['both', '主动和被动连接'], ['active', '主动连接'], ['passive', '被动连接']]);
-			select(s, 'tcp', 'tcp_payload', '载荷类型', [['http', 'HTTP'], ['tls', 'TLS'], ['custom', '自定义文件']]);
-			/* A field that depends() hides must not stay "required" (rmempty =
-			 * false). LuCI's validation.js marks an empty non-optional field
-			 * invalid whenever a dependency recheck runs (form.js checkDepends ->
-			 * triggerValidation) and nothing clears that mark once the field is
-			 * hidden, so the next tab switch shows a "N 个无效字段" tooltip
-			 * pointing at a field that is no longer on screen. Which of these two
-			 * is actually needed depends on 载荷类型 — a condition LuCI cannot
-			 * express — so config.js enforces it and names the TOML path. */
-			var o = value(s, 'tcp', 'tcp_hostname', '伪装域名');
-			o.rmempty = true;
-			o.depends('tcp_payload', 'http'); o.depends('tcp_payload', 'tls');
-			o = value(s, 'tcp', 'tcp_payload_file', '载荷文件路径', '路由器上已有的二进制文件，1–1200 字节；例如 /etc/fakehttp/payload.tls。');
-			o.rmempty = true;
-			o.depends('tcp_payload', 'custom');
-			/* These three are optional and always visible, so they must accept an
-			 * empty value: value() defaults to rmempty = false, and a visible
-			 * field with that setting fails form validation. The existing
-			 * payload_file is exempt only because depends() hides it. */
-			o = value(s, 'tcp', 'tcp_https_hostname', '第二个 TCP 模板 · 伪装域名',
-				'可选。填了就在下面的端口上额外发送一份 TLS ClientHello（SNI 取此域名），其余端口仍用主模板；与载荷文件只能填其一。对应配置项 https_hostname。');
-			o.rmempty = true;
-			o = value(s, 'tcp', 'tcp_https_payload_file', '第二个 TCP 模板 · 载荷文件',
-				'可选。路由器上已有的二进制文件，1–1200 字节；与伪装域名只能填其一。对应配置项 https_payload_file。');
-			o.rmempty = true;
-			o = value(s, 'tcp', 'tcp_https_ports', '第二个 TCP 模板 · 端口',
-				'逗号分隔，最多 4 个，例如 443, 8443；留空按 443 处理。未命中的端口仍使用上面的主模板。对应配置项 https_ports。');
-			o.rmempty = true;
+			/* TCP payload rules. The model is a list, so it is edited as a table: the
+			 * row order is the order the daemon rotates through, a disabled row stays
+			 * in the file but is never published, and each connection is pinned to one
+			 * rule so it never mixes an HTTP Host with a TLS SNI. The payload column
+			 * holds a bare host name for HTTP/TLS and an absolute path for
+			 * 自定义文件; LuCI cannot express that condition, so config.js checks it on
+			 * save and names the offending row. */
+			var tbl = m.section(form.GridSection, 'rule', 'tcp', 'TCP 载荷规则',
+				'每条连接在建立时固定使用其中一条规则，连接之间按这里的顺序轮换。');
+			tbl.addremove = true; tbl.sortable = true; tbl.anonymous = true;
+			var to = tbl.option(form.Flag, 'enabled', '启用');
+			to.default = '1'; to.rmempty = false;
+			to = tbl.option(form.ListValue, 'type', '类型');
+			to.value('http', 'HTTP'); to.value('tls', 'TLS'); to.value('custom', '自定义文件');
+			to.rmempty = false;
+			to = tbl.option(form.Value, 'payload', '载荷',
+				'HTTP / TLS 填裸域名，例如 speed.gx.chinamobile.com —— 不要写 http://、端口或路径；'
+				+ '自定义文件填路由器上已有的文件绝对路径，例如 /etc/fakehttp/payload.tls。'
+				+ '生成 HTTP 时域名进 Host 头，生成 TLS 时进 SNI（握手里的服务器名）。');
+			to.rmempty = false;
+			tbl.option(form.Value, 'comment', '备注').rmempty = true;
 			select(s, 'tcp', 'tcp_tfo', 'TCP Fast Open', [['strip-syn', '把首个 SYN 里的 TFO 选项替换为空操作（NOP）'], ['preserve', '保留 TFO']]);
 			value(s, 'tcp', 'tcp_max_batches', '每次握手的注入批数上限', '范围 1–32；握手重传的注入批次间隔至少 200 ms。');
 			flag(s, 'udp', 'udp_enabled', '启用 UDP');

@@ -300,29 +300,40 @@ def inside():
             packets=capture(frame(TCP(sport=443,dport=25000,flags="SA",seq=4,ack=2),True),True)
             assert len(packets)==2
             assert b"new.example.org" in bytes(packets[0][TCP].payload)
-            # Port-matched second TCP template: one instance sends the HTTP Host on
-            # 80 and a TLS ClientHello carrying the configured SNI on 443.
-            config.write_text(text.replace('hostname = "www.example.com"',
-                'hostname = "www.example.com"\nhttps_hostname = "tls.example"'))
+            # TCP payload rules are not selected by port: a connection is pinned to one
+            # rule when its flow state is created and keeps it, while consecutive
+            # connections rotate. Two rules are configured, then six connections are
+            # opened on the same port: every connection must carry exactly one shape,
+            # and across them both shapes must appear.
+            two = text + '\n[[tcp.rule]]\ntype = "tls"\npayload = "tls.example"\n'
+            config.write_text(two)
             assert command("reload").stdout.startswith("OK")
-            for port, marker, absent in ((80, b"Host: www.example.com", b"tls.example"),
-                                         (443, b"tls.example", b"Host: www.example.com")):
-                capture(frame(TCP(sport=26000+port,dport=port,flags="S",seq=1)))
-                packets=capture(frame(TCP(sport=port,dport=26000+port,flags="SA",seq=4,ack=2),True),True)
-                assert len(packets)==2, (port, command("stats").stdout)
+            seen = set()
+            for n in range(6):
+                sport = 27000 + n
+                capture(frame(TCP(sport=sport,dport=443,flags="S",seq=1)))
+                packets = capture(frame(TCP(sport=443,dport=sport,flags="SA",seq=4,ack=2),True),True)
+                assert len(packets) == 2, (n, command("stats").stdout)
+                shapes = set()
                 for p in packets:
                     verify(p)
-                    payload=bytes(p[TCP].payload)
-                    assert marker in payload, (port, payload[:64])
-                    assert absent not in payload, (port, payload[:64])
-                    if port==443:
+                    payload = bytes(p[TCP].payload)
+                    if b"Host: www.example.com" in payload:
+                        shapes.add("http")
+                    elif b"tls.example" in payload:
                         check_client_hello(payload)
-            # The second template is gone again once the key is removed.
+                        shapes.add("tls")
+                    else:
+                        raise AssertionError((n, payload[:64]))
+                assert len(shapes) == 1, (n, "一条连接里混了两种载荷形态", shapes)
+                seen |= shapes
+            assert seen == {"http", "tls"}, ("轮换没有覆盖两条规则", seen)
+            # Back to one rule: every connection carries the HTTP Host again.
             config.write_text(text)
             assert command("reload").stdout.startswith("OK")
-            capture(frame(TCP(sport=26443,dport=443,flags="S",seq=1)))
-            packets=capture(frame(TCP(sport=443,dport=26443,flags="SA",seq=4,ack=2),True),True)
-            assert len(packets)==2
+            capture(frame(TCP(sport=27443,dport=443,flags="S",seq=1)))
+            packets = capture(frame(TCP(sport=443,dport=27443,flags="SA",seq=4,ack=2),True),True)
+            assert len(packets) == 2
             assert b"Host: www.example.com" in bytes(packets[0][TCP].payload)
             # Full-sized binary templates also exercise the bounded checksum chunks.
             binary=bytes(range(256))*4+bytes(range(176))

@@ -7,15 +7,23 @@ mode = "ethernet"
 [tcp]
 enabled = true
 directions = ["active", "passive"]
-payload = "http"
-hostname = "www.example.com"
-# 端口匹配的第二份 TCP 模板：命中 https_ports（默认 443）的连接改发 TLS ClientHello，
-# 其余端口仍用上面的模板。两项都留注释则不存在第二份模板。
-# https_hostname = "www.speedtest.cn"
-# https_payload_file = "/etc/fakeflow/tls.bin"
-# https_ports = [443]
 tfo = "strip-syn"
 max_batches = 3
+
+# TCP 载荷规则：每条连接在建立时固定使用其中一条，连接之间按这里的顺序轮换。
+# type 三选一：http（发 HTTP GET，域名进 Host 头）、tls（发 TLS ClientHello，域名进 SNI）、
+# custom（发文件原始字节，payload 写绝对路径）。最多 3 条，至少一条 enabled = true。
+[[tcp.rule]]
+type = "http"
+payload = "speed.gx.chinamobile.com"
+
+# [[tcp.rule]]
+# type = "tls"
+# payload = "www.speedtest.cn"
+
+# [[tcp.rule]]
+# type = "custom"
+# payload = "/etc/fakehttp/payload.tls"
 
 [udp]
 enabled = true

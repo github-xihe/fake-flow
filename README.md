@@ -55,9 +55,9 @@ sudo build/fakeflow stop
 | `interfaces.mode` | `ethernet` | `ethernet` / `l3` / `pppoe` |
 | `tcp.tfo` | `strip-syn` | `preserve` 可保留 SYN 选项 |
 | `tcp.directions` | `["active", "passive"]` | 按初始 SYN 方向判定 |
-| `tcp.payload` | `http` | `http` / `tls` / `custom` |
-| `tcp.https_hostname` / `tcp.https_payload_file` | 空 | 第二个 TCP 模板；两者只能填其一，都不填则不存在 |
-| `tcp.https_ports` | `[443]` | 逗号分隔、最多 4 个；命中这些端口的连接改用第二个模板，其余仍用主模板 |
+| `[[tcp.rule]]` | 一条 HTTP 规则 | TCP 载荷规则表，最多 3 条；顺序即轮换顺序（见下节） |
+| `[[tcp.rule]].type` / `.payload` | — | `http`（发 HTTP GET，域名进 Host 头）、`tls`（发 TLS ClientHello，域名进 SNI）、`custom`（发文件原始字节，payload 写绝对路径） |
+| `[[tcp.rule]].enabled` / `.comment` | `true` / 空 | 关掉的规则留在文件里但不参与轮换；备注只是给人看 |
 | `udp.trigger` | `egress` | `both` 仅对已有出站记录的入站流注入 |
 | `udp.initial_packets` | `5` | 双向计数；不是 conntrack 包计数 |
 | `injection.ttl` / `repeat` | `3` / `2` | 默认低 TTL 和每批副本数 |
@@ -74,18 +74,23 @@ payload_file = "/etc/fakeflow/tcp.bin"
 # custom 模式不要同时填写 hostname。
 ```
 
-同一实例内同时注入 HTTP 与 TLS 假包。命中 `https_ports` 的连接改用第二个模板，其余端口仍用上面的 `[tcp]`：
+同一个实例可以并列多条规则，连接之间轮换，因此一次连接里不会出现两种协议形态：
 
 ```toml
-[tcp]
-payload = "http"
-hostname = "speed.gx.chinamobile.com"
-https_hostname = "www.speedtest.cn"          # 443 上发 TLS ClientHello，SNI 取此域名
-# https_ports = [443, 8443]                  # 留空按 443 处理，最多 4 个
-# https_payload_file = "/etc/fakeflow/tls.bin"  # 或改用二进制；与 https_hostname 只能填其一
+[[tcp.rule]]
+type = "http"                        # 发 HTTP GET，域名进 Host 头
+payload = "speed.gx.chinamobile.com"
+
+[[tcp.rule]]
+type = "tls"                         # 发 TLS ClientHello，域名进 SNI
+payload = "www.speedtest.cn"
 ```
 
-选槽只看连接两端端口是否落在某份模板的端口表里（出站与入站方向都覆盖），按槽位顺序取第一个命中；客户端临时端口恰好等于某个配置值的连接也会走那份模板，后果只是换了一份低 TTL 假包。未命中任何端口表的连接用 `[tcp]` 主模板。各份模板各自预渲染，`validate` 会分别报告字节数。
+**规则的生效方式**：每条连接在建立时被钉在其中一条规则上（按规则顺序轮换），此后该连接的所有假包都用这一条；
+关掉（`enabled = false`）的规则仍留在文件里但不参与轮换。
+规则不再按端口区分 —— 需要"只在某些端口注入"时，请用防火墙规则限制本功能的作用范围。
+旧写法（`tcp.payload` / `tcp.hostname` / `tcp.payload_file` / `tcp.https_*`）仍能读取，
+会在下一次保存时自动改写为规则表；`tcp.https_ports` 会被忽略并在日志里提示。
 
 TCP 每个握手默认最多 3 批，间隔至少 200 ms。SYN-ACK 携带数据、TCP MD5/AO、TCP 分片、IPv4 选项、未支持的 IPv6 扩展头、GSO/GRO 和超出当前解析边界的报文跳过；不会阻断真实报文。IPv4 UDP 的首片（offset=0、MF=1、含完整 UDP 头）和 `IPv6 → Fragment → UDP` 首片可触发注入，无需重组；后续分片不触发、不占用初期窗口。IPv6 atomic fragment 也按完整 UDP 数据报处理。假包重算校验和、移除分片标记/Fragment 头，真实各片保持不变；叠加其他 IPv6 扩展头仍跳过。当前原始 skb 解析上限为 4096 字节，假包 L3 长度还受 WAN MTU 限制。
 

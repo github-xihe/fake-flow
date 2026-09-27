@@ -46,13 +46,15 @@ int main(int argc,char **argv) {
         struct ff_options o;char error[512];
         if(ff_config_read(config,&o,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
         if(!strcmp(argv[1],"check")) return ff_check(&o);
-        /* The second template is reported only when the configuration defines it,
-         * so the existing line stays byte-identical otherwise. */
-        if(o.slots[1].tpl.len)
-            printf("Configuration valid; TCP template %u B, TCP port-matched template %u B, UDP template %u B\n",
-                o.tcp_template.len,o.slots[1].tpl.len,o.udp_template.len);
-        else
-            printf("Configuration valid; TCP template %u B, UDP template %u B\n",o.tcp_template.len,o.udp_template.len);
+        /* Every enabled TCP rule is listed, so a rule with nothing to send is
+         * visible without decoding traffic. The "Configuration valid;" prefix (and
+         * the UDP tail) stay as they were: views and tests match on those. */
+        printf("Configuration valid;");
+        for(unsigned i=0;i<o.rule_count;i++) {
+            if(!o.rules[i].enabled) continue;
+            printf(" TCP rule %u (%s) %u B,",i+1,o.rules[i].type,o.rules[i].tpl.len);
+        }
+        printf(" UDP template %u B\n",o.udp_template.len);
         return 0;
     }
     if(!strcmp(argv[1],"status") || !strcmp(argv[1],"stats") ||

@@ -59,7 +59,7 @@ static __noinline int emit(struct __sk_buff *skb,struct ff_interface *iface,stru
             .reverse=reverse,.ttl=ttl,
             /* The slot travels with the variant so the builder can key the
              * template map without a second config lookup. */
-            .variant=((plan&(FF_TEMPLATE_SLOTS-1))<<FF_TEMPLATE_VARIANT_BITS)|variant};
+            .variant=((plan&(FF_TEMPLATE_PLAN_COUNT-1))<<FF_TEMPLATE_VARIANT_BITS)|variant};
         r.saved_cb[0]=skb->cb[0];r.saved_cb[1]=skb->cb[1];
         if(bpf_map_update_elem(&requests,&id,&r,BPF_NOEXIST)) {stat(FF_MAP_FAILED);continue;}
         skb->cb[0]=id;skb->cb[1]=id>>32;
@@ -112,23 +112,16 @@ static __always_inline int observe(struct __sk_buff *skb,int in) {
      * into skip_layout here. */
     if(parse(skb,iface,in,&p)) return TC_ACT_UNSPEC;
     if(!remote_allowed(&p,c)) {stat(FF_SKIP_PRIVATE);return TC_ACT_UNSPEC;}
-    /* Which template slot applies. A connection whose local or remote port is in
-     * the configured list uses the second TCP template (slot 1), so an HTTP Host
-     * and a TLS SNI can coexist in one instance; matching either end also covers
-     * the direction we did not initiate. UDP always uses slot 0. */
-    __u32 slot=0;
-    if(p.key.protocol==6) {
-        #pragma unroll
-        for(int i=0;i<FF_HTTPS_PORTS_MAX;i++) {
-            if(i>=(int)c->port_count) break;
-            if(p.key.remote_port==(__u16)c->ports[i] ||
-               p.key.local_port==(__u16)c->ports[i]) {slot=1;break;}
-        }
-    }
-    __u32 plan=(p.key.protocol==6?0:FF_TEMPLATE_SLOTS)+slot;
+    /* Which payload rule applies. Rules are not selected by port: the rule is
+     * pinned to the connection when its flow state is created, so one connection
+     * never mixes an HTTP Host with a TLS SNI while consecutive connections
+     * rotate through the configured rules. UDP keeps its single template. */
+    __u32 plan=FF_TEMPLATE_PLAN_UDP, rule=0;
     __u32 remote_ttl=0;int trigger=0;
-    if(p.key.protocol==6 && c->tcp_enabled) trigger=tcp_trigger(skb,&p,c,in,now,&remote_ttl);
-    else if(p.key.protocol==17 && c->udp_enabled) trigger=udp_trigger(&p,c,in,now,&remote_ttl);
+    if(p.key.protocol==6 && c->tcp_enabled) {
+        trigger=tcp_trigger(skb,&p,c,in,now,&remote_ttl,&rule);
+        plan=rule;
+    } else if(p.key.protocol==17 && c->udp_enabled) trigger=udp_trigger(&p,c,in,now,&remote_ttl);
     if(trigger) emit(skb,iface,c,in,FF_EMIT_META(remote_ttl,plan));
     return TC_ACT_UNSPEC;
 }

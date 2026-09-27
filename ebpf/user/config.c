@@ -32,9 +32,11 @@ static int boolean(char *v, __u32 *out) {
     else return -1;
     return 0;
 }
-/* [443] or [443, 8443]. The second TCP template is selected by this list alone,
- * so an empty list, a trailing comma, a duplicate or an out-of-range value is an
- * error rather than a template nothing can ever reach. */
+/* [443] or [443, 8443]. Only the deprecated https_ports key still reaches this,
+ * and its value is discarded: rules are no longer selected by port, so the list
+ * is accepted (and its syntax checked) purely so an existing configuration keeps
+ * parsing. */
+#define FF_PORTS_MAX 8
 static int ports(char *v, unsigned *out, unsigned *count) {
     char compact[128]; unsigned n = 0;
     for (char *p = v; *p && n < sizeof(compact)-1; p++)
@@ -49,7 +51,7 @@ static int ports(char *v, unsigned *out, unsigned *count) {
         unsigned long num = strtoul(p, &end, 10);
         if (errno || num < 1 || num > 65535 || end == p) return -1;
         for (unsigned i = 0; i < *count; i++) if (out[i] == num) return -1;
-        if (*count == FF_HTTPS_PORTS_MAX) return -1;
+        if (*count == FF_PORTS_MAX) return -1;
         out[(*count)++] = num;
         p = end;
         if (*p == ']' && !p[1]) return 0;
@@ -63,14 +65,17 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         .strip_tfo=1,.tcp_batches=3,.udp_packets=5,.udp_idle=30,
         .ttl=3,.repeat=2,.estimate_hops=1,.rate=1000,.burst=2000};
     o->tcp_entries=8192; o->udp_entries=8192; o->lease=10;
+    /* Legacy scratch fields: a configuration without [[tcp.rule]] entries is read
+     * through these and turned into rules after parsing. */
     strcpy(o->tcp_payload,"http"); strcpy(o->udp_payload,"sip");
     strcpy(o->hostname,"www.example.com"); strcpy(o->sip_uri,"sip:service@example.com");
+    char https_hostname[254] = "", https_file[1024] = "";
     FILE *f = fopen(path,"r");
     if (!f) { snprintf(error,cap,"%s: %s",path,strerror(errno)); return -1; }
     char line[2048], section[32]="", seen[128][96];
     unsigned lineno=0, count=0, version=0, sections_seen=0;
-    int bad=0, ports_given=0;
-    unsigned https_ports[FF_HTTPS_PORTS_MAX], https_count=0;
+    int bad=0, ports_given=0, legacy_https=0;
+    unsigned throwaway[FF_PORTS_MAX], throwaway_count=0;
     while (fgets(line,sizeof(line),f)) {
         lineno++;
         if (!strchr(line,'\n') && !feof(f)) { bad=1; break; }
@@ -85,6 +90,13 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
             if (!strcmp(s,"[[interfaces]]")) {
                 if (o->device_count==FF_INTERFACES) { bad=1; break; }
                 o->device_count++; strcpy(section,"interfaces"); continue;
+            }
+            /* [[tcp.rule]] blocks carry the TCP payload rules; their order is the
+             * order the rotation visits them. */
+            if (!strcmp(s,"[[tcp.rule]]")) {
+                if (o->rule_count==FF_TCP_RULES_MAX) { bad=1; break; }
+                o->rules[o->rule_count].enabled=1;
+                o->rule_count++; strcpy(section,"tcp.rule"); continue;
             }
             const char *sections[]={"tcp","udp","injection","runtime"};
             int found=0;
@@ -101,7 +113,8 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         v=strchr(s,'='); if (!v) { bad=1; break; } *v++=0;
         s=trim(s); v=trim(v);
         char id[96];
-        unsigned index = !strcmp(section,"interfaces") ? o->device_count : 0;
+        unsigned index = !strcmp(section,"interfaces") ? o->device_count :
+                         !strcmp(section,"tcp.rule") ? o->rule_count : 0;
         if (snprintf(id,sizeof(id),"%s.%u.%s",section,index,s)>=(int)sizeof(id)) { bad=1; break; }
         for(unsigned i=0;i<count;i++) if (!strcmp(seen[i],id)) bad=1;
         if(bad || count==128) { bad=1; break; }
@@ -111,6 +124,7 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
 #define NUM(sec,key,field,lo,hi) if (KEY(sec,key)) rc=number(v,&(field),lo,hi)
 #define BOOL(sec,key,field) if (KEY(sec,key)) rc=boolean(v,&(field))
 #define STR(sec,key,field) if (KEY(sec,key)) rc=string(v,field,sizeof(field))
+#define RULE (o->rule_count ? &o->rules[o->rule_count-1] : NULL)
         NUM("","version",version,1,1);
         if (KEY("interfaces","name")) rc=string(v,o->devices[o->device_count-1].name,IF_NAMESIZE);
         if (KEY("interfaces","mode")) {
@@ -122,13 +136,29 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
                 else rc=-1;
             }
         }
+        /* One TCP payload rule. type and payload are resolved after the whole file
+         * is read, because TOML does not promise which of the two comes first. */
+        if (KEY("tcp.rule","type")) {
+            char t[16]; rc=string(v,t,sizeof(t));
+            if(!rc && strcmp(t,"http") && strcmp(t,"tls") && strcmp(t,"custom")) rc=-1;
+            else if(!rc) strcpy(RULE->type,t);
+        }
+        if (KEY("tcp.rule","payload")) rc=string(v,RULE->payload,sizeof(RULE->payload));
+        if (KEY("tcp.rule","enabled")) rc=boolean(v,&RULE->enabled);
+        if (KEY("tcp.rule","comment")) { char note[128]; rc=string(v,note,sizeof(note)); }
         BOOL("tcp","enabled",o->kernel.tcp_enabled);
         BOOL("udp","enabled",o->kernel.udp_enabled);
-        STR("tcp","payload",o->tcp_payload); STR("udp","payload",o->udp_payload);
-        STR("tcp","hostname",o->hostname); STR("udp","sip_uri",o->sip_uri);
-        STR("tcp","payload_file",o->tcp_file); STR("udp","payload_file",o->udp_file);
-        STR("tcp","https_hostname",o->https_hostname);
-        STR("tcp","https_payload_file",o->https_file);
+        STR("udp","payload",o->udp_payload);
+        STR("udp","sip_uri",o->sip_uri);
+        STR("udp","payload_file",o->udp_file);
+        /* Deprecated single-template keys. They still configure the first (and
+         * second) rule when no [[tcp.rule]] block is present, and are ignored with a
+         * warning otherwise. */
+        STR("tcp","payload",o->tcp_payload);
+        STR("tcp","hostname",o->hostname);
+        STR("tcp","payload_file",o->tcp_file);
+        STR("tcp","https_hostname",https_hostname);
+        STR("tcp","https_payload_file",https_file);
         if (KEY("tcp","directions")) {
             char compact[128]; unsigned n=0;
             for(char *p=v; *p && n<sizeof(compact)-1; p++) if(!isspace((unsigned char)*p)) compact[n++]=*p;
@@ -142,7 +172,7 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
             if(!strcmp(v,"\"strip-syn\"")) {o->kernel.strip_tfo=1;rc=0;}
             if(!strcmp(v,"\"preserve\"")) {o->kernel.strip_tfo=0;rc=0;}
         }
-        if(KEY("tcp","https_ports")) {rc=ports(v,https_ports,&https_count);ports_given=!rc;}
+        if(KEY("tcp","https_ports")) {rc=ports(v,throwaway,&throwaway_count);ports_given=!rc;}
         if(KEY("udp","trigger")) {
             if(!strcmp(v,"\"egress\"")) {o->kernel.udp_both=0;rc=0;}
             if(!strcmp(v,"\"both\"")) {o->kernel.udp_both=1;rc=0;}
@@ -176,26 +206,60 @@ int ff_config_read(const char *path, struct ff_options *o, char *error, size_t c
         }
     }
     if(o->kernel.burst<o->kernel.repeat) {snprintf(error,cap,"burst must be >= repeat");return -1;}
-    /* The second TCP template. It stays absent unless https_hostname or
-     * https_file is set, so a configuration that does not use it behaves exactly
-     * as before (including sending the primary template to every port); without
-     * an explicit port list it is selected on 443, which is what the predecessor
-     * injected as "https". */
-    if(*o->https_hostname || *o->https_file) {
-        strcpy(o->slots[1].hostname,o->https_hostname);
-        strcpy(o->slots[1].file,o->https_file);
-        if(!ports_given) {o->kernel.ports[0]=443;o->kernel.port_count=1;}
-        else {
-            for(unsigned i=0;i<https_count;i++) o->kernel.ports[i]=https_ports[i];
-            o->kernel.port_count=https_count;
+    legacy_https = *https_hostname || *https_file;
+    if (!o->rule_count) {
+        /* No [[tcp.rule]] entries: translate the single-template keys into rules,
+         * in the order the old configuration implied (primary first, then the
+         * https_* one). A connection is no longer pinned by port, so the first
+         * connection may get either shape; that is the documented change from the
+         * port-matched model. */
+        struct ff_rule *r0=&o->rules[0];
+        r0->enabled=1;
+        if(!strcmp(o->tcp_payload,"custom")) {
+            strcpy(r0->type,"custom"); strcpy(r0->payload,o->tcp_file);
+        } else if(!strcmp(o->tcp_payload,"tls")) {
+            strcpy(r0->type,"tls"); strcpy(r0->payload,o->hostname);
+        } else {
+            strcpy(r0->type,"http"); strcpy(r0->payload,o->hostname);
         }
-        o->slot_count=1;
+        o->rule_count=1;
+        if(legacy_https) {
+            struct ff_rule *r1=&o->rules[1];
+            r1->enabled=1;
+            if(*https_file) { strcpy(r1->type,"custom"); strcpy(r1->payload,https_file); }
+            else { strcpy(r1->type,"tls"); strcpy(r1->payload,https_hostname); }
+            o->rule_count=2;
+        }
+        if(ports_given) snprintf(o->warning,sizeof(o->warning),
+            "tcp.https_ports is ignored: TCP rules are not selected by port");
+    } else {
+        if(legacy_https || strcmp(o->tcp_payload,"http") || strcmp(o->hostname,"www.example.com") ||
+           *o->tcp_file || ports_given)
+            snprintf(o->warning,sizeof(o->warning),
+                "tcp.payload/hostname/payload_file/https_* are ignored while [[tcp.rule]] entries exist");
+    }
+    /* Resolve every enabled rule's payload into the field its type reads and check
+     * the shape, so the datapath never renders a rule with nothing to send. */
+    for(unsigned i=0;i<o->rule_count;i++) {
+        struct ff_rule *r=&o->rules[i];
+        if(!r->enabled) continue;
+        if(!r->type[0]) {snprintf(error,cap,"[[tcp.rule]] #%u: type is required",i+1);return -1;}
+        if(!r->payload[0]) {snprintf(error,cap,"[[tcp.rule]] #%u: payload is required",i+1);return -1;}
+        if(!strcmp(r->type,"custom")) {
+            if(r->payload[0]!='/') {snprintf(error,cap,"[[tcp.rule]] #%u: payload must be a path for type custom",i+1);return -1;}
+            strcpy(r->file,r->payload);
+        } else {
+            for(char *p=r->payload; *p; p++)
+                if(*p=='/' || *p==':' || *p==' ') {
+                    snprintf(error,cap,"[[tcp.rule]] #%u: hostname must be a bare name (no scheme, port or path)",i+1);
+                    return -1;
+                }
+            strcpy(r->hostname,r->payload);
+        }
     }
     for(unsigned i=0;i<count;i++) {
-        if((!strcmp(o->tcp_payload,"custom") && !strcmp(seen[i],"tcp.0.hostname")) ||
-           (!strcmp(o->udp_payload,"custom") && !strcmp(seen[i],"udp.0.sip_uri")) ||
-           (*o->https_file && !strcmp(seen[i],"tcp.0.https_hostname"))) {
-            snprintf(error,cap,"custom payload_file cannot be combined with hostname or sip_uri");return -1;
+        if(!strcmp(o->udp_payload,"custom") && !strcmp(seen[i],"udp.0.sip_uri")) {
+            snprintf(error,cap,"custom payload_file cannot be combined with sip_uri");return -1;
         }
     }
     return ff_templates(o,error,cap);

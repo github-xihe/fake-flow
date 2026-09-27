@@ -307,11 +307,15 @@ payload = "http"        # http | tls | custom
 hostname = "www.example.com"
 # payload = "custom" 时改用 payload_file，不同时设置 hostname
 # payload_file = "/etc/fakeflow/tcp-payload.bin"
-# 端口匹配的第二份 TCP 模板：命中 https_ports（默认 [443]）的连接改用它。
-# 两份模板可同时生效，例如 80 发 HTTP、443 发 TLS。都不填则不存在第二份模板。
-# https_hostname = "www.speedtest.cn"
-# https_payload_file = "/etc/fakeflow/tls.bin"
-# https_ports = [443, 8443]
+# TCP 载荷规则：每条连接在建立时钉住其中一条，连接之间按顺序轮换。
+# type 三选一：http / tls / custom（custom 时 payload 是文件绝对路径）。
+[[tcp.rule]]
+type = "http"
+payload = "speed.gx.chinamobile.com"
+[[tcp.rule]]
+type = "tls"
+payload = "www.speedtest.cn"
+
 tfo = "strip-syn"      # strip-syn | preserve
 max_batches = 3
 
@@ -351,7 +355,7 @@ payload 不编译成不可更改的 BPF 常量。必须区分以下三类“地�
 | HTTP Host、TLS SNI、SIP URI | 用户态根据配置生成模板，写入 map；reload 后的新注入请求使用新世代 |
 | 自定义 payload 文件路径 | `payload_file` 指定本地二进制文件；用户态在启动/reload 时读取，再写入 map |
 
-TLS 模板（`payload = tls`，以及端口模板填了域名时）由用户态按下列结构渲染，每个变体重渲染一次，
+TLS 模板（`type = "tls"` 的规则）由用户态按下列结构渲染，每个变体重渲染一次，
 因此 32 字节随机数与 32 字节会话 ID 每次都不同：
 
 | 字段 | 取值 |
