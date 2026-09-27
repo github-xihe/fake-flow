@@ -32,21 +32,56 @@ static void hex_raw(char *out,unsigned bytes) {
 /* NUL-terminated form for fields that are consumed as C strings. */
 static void hex_token(char *out,unsigned bytes) {hex_raw(out,bytes);out[bytes*2]=0;}
 static int is_hex(char c) {return (c>='0'&&c<='9')||(c>='a'&&c<='f');}
+/* Fixed length of the generated ClientHello, padding extension included. A real
+ * ClientHello grows with the SNI, so its length leaks how long the disguised
+ * host name is; browsers answer that with the RFC 7685 padding extension, and so
+ * does this template. 512 is what Chrome pads to. */
+#define FF_TLS_HELLO_BYTES 512
 static int tls(struct ff_template *t,const char *hostname) {
     size_t n=strlen(hostname); unsigned char *p=t->data;
-    /* TLS 1.2 ClientHello with SNI and a single supported cipher suite. The
-     * 32-byte ClientHello random is generated here, so a variant of this
-     * template is produced by rendering again rather than by patching bytes. */
+    /* TLS 1.2 ClientHello shaped like a browser's: 32-byte session id, the two
+     * ECDHE suites plus the RSA ones clients still offer, and the extensions
+     * every client sends (server_name, supported_groups, signature_algorithms,
+     * ec_point_formats, ALPN) — a ClientHello carrying nothing but SNI has a
+     * JA3 hash of its own, which is a fingerprint rather than a disguise.
+     * The record layer keeps the legacy version 0x0301 (RFC 8446 §5.1).
+     * The 32-byte random and the session id are drawn here, so a variant is
+     * produced by rendering again rather than by patching bytes. */
     memset(t,0,sizeof(*t));
-    p[0]=22;p[1]=3;p[2]=1;p[5]=1;
-    p[9]=3;p[10]=3;
+    if(n>253) return -1;
+    p[0]=22; put16(p+1,0x0301);
+    p[5]=1;
+    put16(p+9,0x0303);
     if(getrandom(p+11,32,0)!=32) return -1;
-    unsigned pos=43;
-    p[pos++]=0; put16(p+pos,2);pos+=2;put16(p+pos,0xc02f);pos+=2;
+    p[43]=32;
+    if(getrandom(p+44,32,0)!=32) return -1;
+    unsigned pos=76;
+    static const unsigned char suites[]={
+        0xc0,0x2f,  /* ECDHE_RSA_WITH_AES_128_GCM_SHA256 */
+        0xc0,0x2b,  /* ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 */
+        0xc0,0x30,  /* ECDHE_RSA_WITH_AES_256_GCM_SHA384 */
+        0xc0,0x2c,  /* ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 */
+        0x00,0x9c,  /* RSA_WITH_AES_128_GCM_SHA256 */
+        0x00,0x9d}; /* RSA_WITH_AES_256_GCM_SHA384 */
+    put16(p+pos,sizeof(suites));pos+=2;memcpy(p+pos,suites,sizeof(suites));pos+=sizeof(suites);
     p[pos++]=1;p[pos++]=0;
-    put16(p+pos,n+9);pos+=2;put16(p+pos,0);pos+=2;
-    put16(p+pos,n+5);pos+=2;put16(p+pos,n+3);pos+=2;p[pos++]=0;
+    unsigned extlen_at=pos;pos+=2;
+    unsigned ext_start=pos;
+    put16(p+pos,0);pos+=2;put16(p+pos,n+5);pos+=2;put16(p+pos,n+3);pos+=2;p[pos++]=0;
     put16(p+pos,n);pos+=2;memcpy(p+pos,hostname,n);pos+=n;
+    put16(p+pos,10);pos+=2;put16(p+pos,8);pos+=2;put16(p+pos,6);pos+=2;
+    put16(p+pos,0x001d);pos+=2;put16(p+pos,0x0017);pos+=2;put16(p+pos,0x0018);pos+=2;
+    put16(p+pos,13);pos+=2;put16(p+pos,14);pos+=2;put16(p+pos,12);pos+=2;
+    put16(p+pos,0x0403);pos+=2;put16(p+pos,0x0804);pos+=2;put16(p+pos,0x0401);pos+=2;
+    put16(p+pos,0x0503);pos+=2;put16(p+pos,0x0805);pos+=2;put16(p+pos,0x0501);pos+=2;
+    put16(p+pos,11);pos+=2;put16(p+pos,2);pos+=2;p[pos++]=1;p[pos++]=0;
+    put16(p+pos,16);pos+=2;put16(p+pos,14);pos+=2;put16(p+pos,12);pos+=2;
+    p[pos++]=2;p[pos++]='h';p[pos++]='2';
+    p[pos++]=8;memcpy(p+pos,"http/1.1",8);pos+=8;
+    if(pos+4>FF_TLS_HELLO_BYTES) return -1;
+    put16(p+pos,21);pos+=2;put16(p+pos,FF_TLS_HELLO_BYTES-pos-2);pos+=2;
+    pos=FF_TLS_HELLO_BYTES;
+    put16(p+extlen_at,pos-ext_start);
     put16(p+3,pos-5); p[6]=(pos-9)>>16;p[7]=(pos-9)>>8;p[8]=pos-9;
     t->len=pos;return 0;
 }

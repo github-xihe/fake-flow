@@ -7,6 +7,8 @@
 ## 功能
 
 - IPv4/IPv6，主动与被动 TCP，HTTP GET、TLS ClientHello、自定义二进制模板。
+  ClientHello 带会话 ID、椭圆曲线、签名算法与 ALPN（h2、http/1.1），并用 padding
+  填充到定长 512 字节 —— 长度不随伪装域名变化，也不会只凭扩展列表被 JA3 类指纹盯上。
 - 首个 SYN 的 kind 34 选项替换为等长 NOP，包括携带业务数据的 SYN；保留业务数据，并按实际 SYN-ACK 序号决定假包序号。
 - UDP 默认只在出站早期报文前注入 SIP INVITE；支持 `both` 和自定义模板。
 - WAN observer → 私有 dummy/TUN builder → 原 WAN egress，原包与副本分离。

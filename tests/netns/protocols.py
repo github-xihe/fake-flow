@@ -14,6 +14,33 @@ import time
 ROOT = Path(__file__).resolve().parents[2]
 BIN = ROOT / "build/fakeflow"
 
+def check_client_hello(payload):
+    """假 ClientHello 必须能被真实 TLS 栈解析：逐字段走长度链，并要求齐备浏览器都会发的
+    扩展。只带 SNI 的极简握手有独一无二的 JA3 哈希（等于指纹），缺少 signature_algorithms
+    时 TLS 1.2 服务端只能退到 SHA-1 —— OpenSSL 3.5 实测直接以 handshake_failure 拒绝。
+    总长还必须定长，否则长度泄露伪装域名的长度。"""
+    assert payload[0] == 0x16 and payload[5] == 1, payload[:8]
+    assert 5 + int.from_bytes(payload[3:5], "big") == len(payload), len(payload)
+    assert 9 + int.from_bytes(payload[6:9], "big") == len(payload), len(payload)
+    assert len(payload) == 512, len(payload)
+    pos = 44 + payload[43]
+    cs = int.from_bytes(payload[pos:pos + 2], "big")
+    pos += 2 + cs
+    assert payload[pos] == 1 and payload[pos + 1] == 0, payload[pos:pos + 2]
+    pos += 2
+    end = pos + 2 + int.from_bytes(payload[pos:pos + 2], "big")
+    pos += 2
+    exts = []
+    while pos < end:
+        ext_type = int.from_bytes(payload[pos:pos + 2], "big")
+        exts.append(ext_type)
+        pos += 4 + int.from_bytes(payload[pos + 2:pos + 4], "big")
+    assert pos == end, (pos, end)
+    for ext_type in (0, 10, 11, 13, 16, 21):   # SNI、曲线、点格式、签名算法、ALPN、padding
+        assert ext_type in exts, (ext_type, exts)
+    assert exts[-1] == 21, exts                # padding 必须在最后，零填充才构成定长
+
+
 def run(*args, check=True):
     p = sp.run([str(a) for a in args], capture_output=True, text=True)
     if check and p.returncode:
@@ -289,7 +316,7 @@ def inside():
                     assert marker in payload, (port, payload[:64])
                     assert absent not in payload, (port, payload[:64])
                     if port==443:
-                        assert payload[0]==22 and payload[1]==3, payload[:8]
+                        check_client_hello(payload)
             # The second template is gone again once the key is removed.
             config.write_text(text)
             assert command("reload").stdout.startswith("OK")

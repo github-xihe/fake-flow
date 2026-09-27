@@ -351,6 +351,22 @@ payload 不编译成不可更改的 BPF 常量。必须区分以下三类“地�
 | HTTP Host、TLS SNI、SIP URI | 用户态根据配置生成模板，写入 map；reload 后的新注入请求使用新世代 |
 | 自定义 payload 文件路径 | `payload_file` 指定本地二进制文件；用户态在启动/reload 时读取，再写入 map |
 
+TLS 模板（`payload = tls`，以及端口模板填了域名时）由用户态按下列结构渲染，每个变体重渲染一次，
+因此 32 字节随机数与 32 字节会话 ID 每次都不同：
+
+| 字段 | 取值 |
+|---|---|
+| 记录层 | `16 03 01`：handshake，legacy_record_version 0x0301（RFC 8446 §5.1） |
+| client_version | `03 03`（TLS 1.2） |
+| random / session_id | 各 32 字节随机，会话 ID 长度 32 |
+| 密码套件 | ECDHE_RSA / ECDHE_ECDSA AES-GCM 各两套 + RSA AES-GCM 两套 |
+| 扩展 | server_name(0)、supported_groups(10：x25519/secp256r1/secp384r1)、signature_algorithms(13)、ec_point_formats(11：uncompressed)、ALPN(16：h2, http/1.1)、padding(21) |
+| 总长 | 固定 512 字节（padding 补零），与伪装域名长度无关 |
+
+只带 SNI 的极简 ClientHello 会被 JA3 类指纹单独识别（扩展列表只有一项），且缺少
+signature_algorithms 时服务端只能退到 SHA-1 —— OpenSSL 3.5 实测以 handshake_failure 拒绝。
+补齐后的模板可被真实 TLS 栈解析；`tests/netns/protocols.py` 会在 CI 里逐字段校验长度链与扩展集。
+
 更换模板文件、域名或 URI 不要求重新编译或重新挂载 BPF，也不要求重建真实 TCP/UDP 连接；但已有流是否再次注入仍受握手/初期窗口限制。文件内容变化不会自动生效，必须显式 reload。加载失败或内容超过长度限制时保留旧配置，并返回明确错误。单次注入批次固定使用一个世代，不混用新旧字节。
 
 内核程序不按文件路径读文件，不访问远程 URL。`payload = custom` 默认逐字节使用文件内容，不猜测其中哪些字节是地址，也不自动修改它们。
