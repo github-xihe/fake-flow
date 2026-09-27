@@ -341,7 +341,10 @@ def inside():
             # Anchor the key replacements to whole lines: the shipped example
             # carries commented-out keys too, and an unanchored substring match
             # would rewrite a comment into a real (duplicate) setting.
-            custom=text.replace('\npayload = "http"\n',f'\npayload = "custom"\npayload_file = "{payload_file}"\n')
+            # The rule table replaced the flat payload keys, so the custom case swaps the
+            # rule's type and payload instead of editing lines that no longer exist.
+            custom=text.replace('type = "http"', 'type = "custom"').replace(
+                'payload = "www.example.com"', f'payload = "{payload_file}"')
             custom=custom.replace('\nhostname = "www.example.com"\n','\n')
             custom=custom.replace('\npayload = "sip"\n',f'\npayload = "custom"\npayload_file = "{payload_file}"\n')
             custom=custom.replace('\nsip_uri = "sip:service@example.com"\n','\n')
