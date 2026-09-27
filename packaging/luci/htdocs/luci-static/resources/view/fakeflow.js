@@ -65,7 +65,7 @@ return view.extend({
 			 * holds a bare host name for HTTP/TLS and an absolute path for
 			 * 自定义文件; LuCI cannot express that condition, so config.js checks it on
 			 * save and names the offending row. */
-			var tbl = m.section(form.GridSection, 'rule', 'tcp', 'TCP 载荷规则',
+			var tbl = m.section(form.GridSection, 'rule', 'TCP 载荷规则',
 				'每条连接在建立时固定使用其中一条规则，连接之间按这里的顺序轮换。');
 			tbl.addremove = true; tbl.sortable = true; tbl.anonymous = true;
 			var to = tbl.option(form.Flag, 'enabled', '启用');

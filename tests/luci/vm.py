@@ -190,7 +190,7 @@ def main():
                         # offers the three shapes. Editing rows through the table is covered by
                         # the serializer tests; here only the rendering is asserted.
                         tab("TCP")
-                        expect(page.get_by_text("TCP 载荷规则")).to_be_visible()
+                        expect(page.get_by_text("TCP 载荷规则").first).to_be_visible()
                         expect(field("tcp_enabled")).to_be_checked()
                         expect(page.locator('.modal pre')).to_contain_text('initial_packets = 5')
                         page.get_by_role('button', name='关闭', exact=True).click()
@@ -280,7 +280,7 @@ def main():
                         # a stale invalid mark" case cannot happen any more. Its replacement
                         # lives in config.test.cjs (the serializer refuses empty rows).
                         tab("TCP")
-                        expect(page.get_by_text("TCP 载荷规则")).to_be_visible()
+                        expect(page.get_by_text("TCP 载荷规则").first).to_be_visible()
                         tab('UDP')
                         field('udp_payload').select_option('custom')
                         field('udp_payload_file').fill('')
