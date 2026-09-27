@@ -60,7 +60,7 @@ return view.extend({
 		} else {
 			s.tab('tcp', 'TCP'); s.tab('udp', 'UDP'); s.tab('injection', '注入'); s.tab('runtime', '运行参数');
 			flag(s, 'tcp', 'tcp_enabled', '启用 TCP');
-			select(s, 'tcp', 'tcp_directions', '触发方向', [
+			select(s, 'tcp', 'tcp_directions', '连接方向', [
 				['both', '主动和被动连接'], ['active', '主动连接'], ['passive', '被动连接']]);
 			select(s, 'tcp', 'tcp_payload', '载荷类型', [['http', 'HTTP'], ['tls', 'TLS'], ['custom', '自定义文件']]);
 			var o = value(s, 'tcp', 'tcp_hostname', '伪装域名');
@@ -71,19 +71,19 @@ return view.extend({
 			 * empty value: value() defaults to rmempty = false, and a visible
 			 * field with that setting fails form validation. The existing
 			 * payload_file is exempt only because depends() hides it. */
-			o = value(s, 'tcp', 'tcp_https_hostname', 'HTTPS 模板伪装域名',
-				'可选。填了就在下面的端口上额外发送一份 TLS ClientHello，SNI 取此域名；与载荷文件只能填其一。');
+			o = value(s, 'tcp', 'tcp_https_hostname', '端口匹配模板 1 · 伪装域名',
+				'可选。填了就在下面的端口上额外发送一份 TLS ClientHello，SNI 取此域名；与载荷文件只能填其一。对应配置项 https_hostname。');
 			o.rmempty = true;
-			o = value(s, 'tcp', 'tcp_https_payload_file', 'HTTPS 模板载荷文件',
-				'可选。路由器上已有的二进制文件，1–1200 字节；与伪装域名只能填其一。');
+			o = value(s, 'tcp', 'tcp_https_payload_file', '端口匹配模板 1 · 载荷文件',
+				'可选。路由器上已有的二进制文件，1–1200 字节；与伪装域名只能填其一。对应配置项 https_payload_file。');
 			o.rmempty = true;
-			o = value(s, 'tcp', 'tcp_https_ports', 'HTTPS 模板端口',
-				'逗号分隔，最多 4 个，例如 443, 8443；留空按 443 处理。未命中的端口仍使用上面的 TCP 模板。');
+			o = value(s, 'tcp', 'tcp_https_ports', '端口匹配模板 1 · 端口',
+				'逗号分隔，最多 4 个，例如 443, 8443；留空按 443 处理。未命中的端口仍使用上面的主 TCP 模板。对应配置项 https_ports。');
 			o.rmempty = true;
-			select(s, 'tcp', 'tcp_tfo', 'TCP Fast Open', [['strip-syn', '首个 SYN 的 kind 34 替换为 NOP'], ['preserve', '保留 TFO']]);
-			value(s, 'tcp', 'tcp_max_batches', '每次握手最多批数', '范围 1–32；握手重传的注入批次间隔至少 200 ms。');
+			select(s, 'tcp', 'tcp_tfo', 'TCP Fast Open', [['strip-syn', '把首个 SYN 里的 TFO 选项替换为空操作（NOP）'], ['preserve', '保留 TFO']]);
+			value(s, 'tcp', 'tcp_max_batches', '每次握手的注入批数上限', '范围 1–32；握手重传的注入批次间隔至少 200 ms。');
 			flag(s, 'udp', 'udp_enabled', '启用 UDP');
-			select(s, 'udp', 'udp_trigger', '触发方向', [['egress', '仅出站'], ['both', '双向']],
+			select(s, 'udp', 'udp_trigger', '入站触发', [['egress', '仅出站'], ['both', '双向']],
 				'双向模式只有在该流出现本地出站报文后，入站包才会触发向外发假包。');
 			select(s, 'udp', 'udp_payload', '载荷类型', [['sip', 'SIP'], ['custom', '自定义文件']]);
 			o = value(s, 'udp', 'udp_sip_uri', 'SIP URI', '例如 sip:user@203.0.113.1；这是载荷中的文本，不是假包的实际目的地址。');
@@ -95,10 +95,11 @@ return view.extend({
 			value(s, 'injection', 'injection_ttl', 'TTL / Hop Limit');
 			value(s, 'injection', 'injection_repeat', '每批副本数');
 			flag(s, 'injection', 'injection_estimate_hops', '估计对端跳数');
-			value(s, 'injection', 'injection_dynamic_percent', '动态跳数比例（%）', '0 表示使用固定 TTL；启用跳数估计后才有意义。');
+			value(s, 'injection', 'injection_dynamic_percent', '动态跳数比例（%）',
+				'0 = 固定使用上面的 TTL。非 0 时按「估算跳数 × 比例」抬高 TTL（只抬高、不会降低）；一旦 TTL 达到或超过估算跳数就不注入（对端太近）。注意跳数估计与这个值无关：即使填 0，它仍负责判断「对端是否太近」。');
 			value(s, 'injection', 'injection_max_packets_per_second', '每接口每秒假包上限');
-			value(s, 'injection', 'injection_burst', '突发额度', '不能小于每批副本数。');
-			flag(s, 'injection', 'injection_allow_private', '允许私网对端', '用于内网实验；默认关闭。');
+			value(s, 'injection', 'injection_burst', '突发容量', '令牌桶容量，不能小于每批副本数。');
+			flag(s, 'injection', 'injection_allow_private', '允许向私网对端注入', '用于内网实验；默认关闭。');
 			value(s, 'runtime', 'runtime_tcp_entries', 'TCP 流表容量');
 			value(s, 'runtime', 'runtime_udp_entries', 'UDP 流表容量');
 			value(s, 'runtime', 'runtime_lease_seconds', '租约时间（秒）', '守护进程每 2 秒刷新。停止刷新且租约过期后停止注入。');
@@ -114,20 +115,20 @@ return view.extend({
 			 * list is required, so an entry that is never reachable cannot be saved;
 			 * the optional fields accept an empty value and the combination rules are
 			 * reported by config.js with a per-entry message. */
-			var extras = m.section(form.TableSection, 'extra', '端口匹配的 TCP 模板（[[tcp.extra]]）',
-				'可选，最多 ' + config.extra_max + ' 个（与上面的 HTTPS 模板合计）。命中自己端口列表的连接改发这份假载荷，其余端口仍用主 TCP 模板；端口不能与其他模板重复。');
+			var extras = m.section(form.TableSection, 'extra', '额外 TCP 模板',
+				'可选，最多 ' + config.extra_max + ' 个（与上面的「端口匹配模板 1」合计）；配置文件里写作 [[tcp.extra]]。命中自己端口列表的连接改发这份假载荷，其余端口仍用主 TCP 模板；端口不能与其他模板重复。');
 			extras.anonymous = true; extras.addremove = true; extras.sortable = true;
 			o = extras.option(form.Value, 'hostname', '伪装域名',
 				'TLS 时作为 SNI，HTTP 时作为 Host。可打印 ASCII、不含空格；与载荷文件只能填其一。');
 			o.rmempty = true;
 			o.validate = function(section, v) { return !v || /^[!-~]+$/.test(v) || '域名只能是可打印 ASCII，且不含空格。'; };
-			o = extras.option(form.ListValue, 'payload', '生成类型', '仅有伪装域名时使用；填了载荷文件则忽略。');
+			o = extras.option(form.ListValue, 'payload', '载荷类型', '仅有伪装域名时使用（TLS 时作为 SNI，HTTP 时作为 Host）；填了载荷文件则忽略。');
 			o.value('tls', 'TLS ClientHello'); o.value('http', 'HTTP 请求');
 			o.default = 'tls'; o.rmempty = true;
 			o = extras.option(form.Value, 'payload_file', '载荷文件路径',
-				'路由器上已有的二进制文件，1–1200 字节；填了就忽略上面的伪装域名与生成类型。');
+				'路由器上已有的二进制文件，1–1200 字节；填了就忽略上面的伪装域名与载荷类型。');
 			o.rmempty = true;
-			o = extras.option(form.Value, 'ports', '端口',
+			o = extras.option(form.Value, 'ports', '端口列表',
 				'必填，逗号分隔，最多 4 个，例如 8080 或 8000, 8001；它是选择这个模板的唯一依据。');
 			o.rmempty = true;
 		}
@@ -204,14 +205,18 @@ return view.extend({
 	paintStatus: function(data) {
 		var state = decode(data.status, {}), stats = decode(data.stats, {});
 		var expanded = this.statusNode.querySelector('details[open]') !== null;
-		var text = state.running ? (data.managed ? '运行中 · procd 托管' : '运行中 · 手动实例') : '已停止';
-		var cards = [['fake_submit_ok', '假包提交成功'], ['tcp_synack_eligible', 'TCP 可注入握手'],
-			['udp_early_seen', 'UDP 初期报文'], ['builder_failed', '假包构造失败']];
+		var text = state.running ? (data.managed ? '运行中 · 由系统托管' : '运行中 · 手动启动') : '已停止';
+		var cards = [['fake_submit_ok', '假包已注入'], ['tcp_synack_eligible', '可注入 TCP 握手'],
+			['udp_early_seen', 'UDP 初期窗口报文'], ['builder_failed', '假包构造失败']];
 		this.statusNode.replaceChildren(E('h3', {}, [text]),
-			E('p', {}, ['配置世代：' + (state.generation == null ? '—' : state.generation) + '；开机启动：' + (data.autostart ? '是' : '否')]),
+			E('p', { 'title': '守护进程每次成功应用配置后递增，从本次启动起算。' },
+				['配置版本：' + (state.generation == null ? '—' : state.generation) + '；开机启动：' + (data.autostart ? '是' : '否')]),
 			E('div', { 'style': 'display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:1em' }, cards.map(function(c) {
 				return E('div', {}, [E('strong', { 'style': 'font-size:1.5em' }, [stats[c[0]] == null ? '—' : String(stats[c[0]])]), E('div', {}, [c[1]])]);
-			})), E('details', { 'open': expanded ? '' : null }, [E('summary', {}, ['全部计数器']),
+			})), E('p', { 'class': 'cbi-section-descr' },
+				['「假包已注入」表示假包已构造并送出，不代表对端一定收到；「可注入 TCP 握手」表示该握手满足注入条件，'
+					+ '是否真的注入还受速率与租约限制。']),
+			E('details', { 'open': expanded ? '' : null }, [E('summary', {}, ['全部计数器']),
 				E('table', { 'class': 'table' }, Object.keys(stats).map(function(k) {
 					return E('tr', { 'class': 'tr' }, [E('td', { 'class': 'td' }, [k]), E('td', { 'class': 'td' }, [String(stats[k])])]);
 				}))]));
@@ -227,7 +232,7 @@ return view.extend({
 			return rank <= limit;
 		});
 		this.logsNode.textContent = shown.length ? shown.join('\n') : '暂无日志。';
-		this.logsNote.textContent = '来自 /var/log/fakeflow.log（每 5 秒自动刷新；最多显示最近 400 行）。共 '
+		this.logsNote.textContent = '来自 /var/log/fakeflow.log（页面可见时每 5 秒刷新，切回前台立即刷新一次；最多显示最近 400 行）。共 '
 			+ all.length + ' 行，显示 ' + shown.length + ' 行'
 			+ (all.length > shown.length ? '，已按级别隐藏 ' + (all.length - shown.length) + ' 行。' : '。');
 	},

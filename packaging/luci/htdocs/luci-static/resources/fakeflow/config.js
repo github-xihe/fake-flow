@@ -87,15 +87,15 @@ function check_extras(settings) {
 	var list = extras_of(settings), owner = {};
 	var used = (settings.tcp_https_hostname || settings.tcp_https_payload_file) ? 1 : 0;
 	if (used + list.length > extra_max)
-		throw new Error('端口匹配的 TCP 模板最多 ' + extra_max + ' 个（https_* 与 [[tcp.extra]] 合计）。');
+		throw new Error('端口匹配的模板最多 ' + extra_max + ' 份（第 1 份 + 额外模板合计）。');
 	if (used && settings.tcp_https_ports)
-		port_list(settings.tcp_https_ports, 'HTTPS 模板').forEach(function(p) { owner[p] = 'HTTPS 模板'; });
+		port_list(settings.tcp_https_ports, '端口匹配模板 1').forEach(function(p) { owner[p] = '端口匹配模板 1'; });
 	else if (used)
 		/* The parser defaults the port-matched template to 443 when the list is
 		 * empty, so an entry claiming 443 collides with it. */
-		owner[443] = 'HTTPS 模板';
+		owner[443] = '端口匹配模板 1';
 	list.forEach(function(entry, index) {
-		var what = '第 ' + (index + 1) + ' 个 [[tcp.extra]]';
+		var what = '额外 TCP 模板第 ' + (index + 1) + ' 项';
 		if (entry.hostname && entry.payload_file)
 			throw new Error(what + '：伪装域名与载荷文件只能填其一。');
 		if (!entry.hostname && !entry.payload_file)
@@ -105,7 +105,7 @@ function check_extras(settings) {
 		var kind = entry.payload === undefined || entry.payload === null || entry.payload === ''
 			? 'tls' : entry.payload;
 		if (['tls', 'http'].indexOf(kind) < 0)
-			throw new Error(what + '：生成类型无效。');
+			throw new Error(what + '：载荷类型无效。');
 		// The datapath takes the first slot whose list contains the port, so a port
 		// claimed twice would leave one of the templates unreachable.
 		port_list(entry.ports, what).forEach(function(p) {
@@ -198,9 +198,9 @@ function serialize(settings, interfaces) {
 		lines.push('', '[[interfaces]]', 'name = ' + quote(d.name), 'mode = ' + quote(d.mode));
 	});
 	if (modes.pppoe && modes.l3) throw new Error('同一实例不能同时使用物理 PPPoE 和 L3 模式。');
-	if (+settings.injection_burst < +settings.injection_repeat) throw new Error('突发额度不能小于每批副本数。');
+	if (+settings.injection_burst < +settings.injection_repeat) throw new Error('突发容量不能小于每批副本数。');
 	if (settings.tcp_https_hostname && settings.tcp_https_payload_file)
-		throw new Error('HTTPS 模板只能填伪装域名或载荷文件其中之一。');
+		throw new Error('端口匹配模板 1 只能填伪装域名或载荷文件其中之一。');
 	var extras = check_extras(settings);
 	['tcp', 'udp', 'injection', 'runtime'].forEach(function(section) {
 		lines.push('', '[' + section + ']');
@@ -253,13 +253,13 @@ function serialize(settings, interfaces) {
 		/* The array of tables belongs to [tcp], so it is emitted before the next
 		 * section header: a key after [[tcp.extra]] would land in the last entry. */
 		if (section !== 'tcp') return;
-		extras.forEach(function(entry) {
+		extras.forEach(function(entry, index) {
 			lines.push('', '[[tcp.extra]]');
-			if (entry.payload_file) lines.push('payload_file = ' + quote(entry.payload_file, '[[tcp.extra]] payload_file'));
+			if (entry.payload_file) lines.push('payload_file = ' + quote(entry.payload_file, '额外 TCP 模板第 ' + (index + 1) + ' 项 · payload_file'));
 			else {
 				var host = entry.hostname === undefined || entry.hostname === null ? '' : entry.hostname;
-				lines.push('hostname = ' + quote(host, '[[tcp.extra]] hostname'));
-				lines.push('payload = ' + quote(entry.payload === 'http' ? 'http' : 'tls', '[[tcp.extra]] payload'));
+				lines.push('hostname = ' + quote(host, '额外 TCP 模板第 ' + (index + 1) + ' 项 · hostname'));
+				lines.push('payload = ' + quote(entry.payload === 'http' ? 'http' : 'tls', '额外 TCP 模板第 ' + (index + 1) + ' 项 · payload'));
 			}
 			lines.push('ports = [' + port_list(entry.ports, '[[tcp.extra]]').join(', ') + ']');
 		});

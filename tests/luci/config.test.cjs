@@ -165,9 +165,9 @@ for (const [settings, expected] of [
   [{ ...model.settings, tcp_hostname: 'x"\ny' }, /tcp\.hostname.*不能包含双引号/],
   [{ ...model.settings, tcp_hostname: null }, /tcp\.hostname.*不能为空/],
   [{ ...model.settings, udp_initial_packets: null }, /udp\.initial_packets.*需要一个整数/],
-  [{ ...model.settings, tcp_extras: [{ hostname: 'a"b', ports: '1' }] }, /\[\[tcp\.extra\]\] hostname.*不能包含双引号/],
+  [{ ...model.settings, tcp_extras: [{ hostname: 'a"b', ports: '1' }] }, /额外 TCP 模板第 1 项 · hostname.*不能包含双引号/],
   [{ ...model.settings, tcp_https_hostname: 'h', tcp_extras: [
-    { hostname: 'a', ports: '1' }, { hostname: 'b', ports: '2' }, { hostname: 'c', ports: '3' }] }, /最多 3 个/]
+    { hostname: 'a', ports: '1' }, { hostname: 'b', ports: '2' }, { hostname: 'c', ports: '3' }] }, /最多 3 份/]
 ]) assert.throws(() => config.serialize(settings, model.interface), expected);
 // The reported failure: a config that turns on the https_* template leaves the
 // HTTPS payload_file empty in the form, LuCI hands that over as null/undefined,

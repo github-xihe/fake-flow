@@ -271,7 +271,7 @@ WAN 入站以 TCX `BPF_F_BEFORE`（无 relative 引用）插入队首，先观�
 
 | map | 用途 | 初始容量目标 |
 |---|---|---|
-| `config` / `interfaces` | 活跃配置世代、设备身份、链路模式 | 每实例最多 8 个 WAN |
+| `config` / `interfaces` | 活跃配置世代（界面显示为「配置版本」）、设备身份、链路模式 | 每实例最多 8 个 WAN |
 | `templates` | 完整 HTTP/TLS/SIP/custom 字节模板 | 最多 16 个，每个不超过 1200 B |
 | `tcp_flows` | 握手世代、方向、注入额度、时间 | 8192，可配置 |
 | `udp_flows` | 双向计数、空闲时间、注入额度 | 8192，可配置 |

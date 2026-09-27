@@ -239,13 +239,13 @@ def main():
                         page.get_by_role('button', name='关闭', exact=True).click()
                         assert 'initial_packets = 6' in applied, applied
                         save(rpc('get'), config=applied, enabled=True, autostart=True, apply=True)
-                        expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
+                        expect(page.locator('#fakeflow-status')).to_contain_text('由系统托管', timeout=30000)
                         assert 'initial_packets = 6' in rpc('get')['config']
                         assert 'trigger = "both"' in rpc('get')['config']
                         page.locator('#ff-stop').click()
                         expect(page.locator('#fakeflow-status')).to_contain_text('已停止', timeout=30000)
                         page.locator('#ff-start').click()
-                        expect(page.locator('#fakeflow-status')).to_contain_text('procd 托管', timeout=30000)
+                        expect(page.locator('#fakeflow-status')).to_contain_text('由系统托管', timeout=30000)
                         # The daemon keeps its own log file so that syslog stays clean;
                         # the log section is where that output has to show up.
                         expect(page.locator('#fakeflow-logs-section')).to_be_visible(timeout=15000)
@@ -297,7 +297,7 @@ def main():
                         # row. Save through rpcd (blocking) instead of the button:
                         # every rpcd method holds the config lock, so a click that
                         # applies would race the next call.
-                        expect(page.get_by_text('端口匹配的 TCP 模板（[[tcp.extra]]）').first).to_be_visible(timeout=15000)
+                        expect(page.get_by_text('额外 TCP 模板').first).to_be_visible(timeout=15000)
                         page.locator('button.cbi-button-add').last.click()
                         page.locator('input[id$=".hostname"]').last.fill('extra.example')
                         page.locator('input[id$=".ports"]').last.fill('8080')
