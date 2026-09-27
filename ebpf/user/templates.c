@@ -64,17 +64,16 @@ static int http(struct ff_template *t,const char *hostname) {
     if(n<0 || n>=FF_PAYLOAD_MAX) return -1;
     t->len=n;return 0;
 }
-/* Render one port-matched slot. A payload file wins over the generated kinds, so
- * a slot with both is rejected during parsing instead of here. Returns -1 for an
- * unreadable or oversized payload file and -2 for anything else, which is the
- * distinction the caller turns into its two error messages. */
-static int slot_template(struct ff_tcp_slot *s,unsigned kind,struct ff_plan *plan) {
+/* Render the second TCP template. A payload file wins over the generated
+ * ClientHello, so a slot with both is rejected during parsing instead of here.
+ * Returns -1 for an unreadable or oversized payload file and -2 for anything else,
+ * which is the distinction the caller turns into its two error messages. */
+static int slot_template(struct ff_tcp_slot *s,struct ff_plan *plan) {
     if(*s->file) {
         if(custom(s->file,&s->tpl)) return -1;
         return 0;
     }
     if(!safe_text(s->hostname)) return -2;
-    if(kind==FF_SLOT_HTTP) return http(&s->tpl,s->hostname)?-2:0;
     if(tls(&s->tpl,s->hostname)) return -2;
     plan->kind=FF_VARIANT_RENDER;plan->variants=FF_TEMPLATE_VARIANTS;
     return 0;
@@ -110,9 +109,9 @@ int ff_templates(struct ff_options *o,char *error,size_t cap) {
     memset(&o->tcp_template,0,sizeof(o->tcp_template));
     memset(&o->udp_template,0,sizeof(o->udp_template));
     memset(o->plan,0,sizeof(o->plan));
-    /* o->extra is deliberately not cleared here: the parser filled the slots'
-     * hostname/file/kind and this function only renders them. Callers must pass a
-     * zeroed struct (ff_config_read does, which is also what keeps the slots the
+    /* o->slots is deliberately not cleared here: the parser filled each slot's
+     * hostname/file and this function only renders them. Callers must pass a
+     * zeroed struct (ff_config_read does, which is also what keeps a slot the
      * configuration did not define empty and therefore unpublished). */
     /* A template without randomised bytes is published once; the others get the
      * full pre-rendered set the observer picks from. */
@@ -133,18 +132,17 @@ int ff_templates(struct ff_options *o,char *error,size_t cap) {
     }
 
     /* Slot 0 mirrors the primary template, so the publish loop and the variant
-     * renderer treat every slot the same way instead of special-casing the
+     * renderer treat both slots the same way instead of special-casing the
      * primary. */
-    o->extra[0].tpl=o->tcp_template;
-    strcpy(o->extra[0].hostname,o->hostname);
-    strcpy(o->extra[0].file,o->tcp_file);
-    /* Port-matched slots, in configuration order: the https_* compatibility keys
-     * take slot 1, then each [[tcp.extra]] entry the next free slot. The parser
-     * filled their hostname/file/kind and bounds extra_count to the slots that
-     * exist, so a slot the configuration did not define is never rendered (and
-     * never published, which is what keeps its connections on the primary). */
-    for(unsigned s=1;s<=o->extra_count && s<FF_TEMPLATE_SLOTS;s++) {
-        int rc=slot_template(&o->extra[s],o->extra_kind[s],&o->plan[FF_TEMPLATE_PLAN(0,s)]);
+    o->slots[0].tpl=o->tcp_template;
+    strcpy(o->slots[0].hostname,o->hostname);
+    strcpy(o->slots[0].file,o->tcp_file);
+    /* The second TCP template, when the https_* keys configured one. The parser
+     * already filled its hostname/file and set slot_count, so a template that was
+     * not configured is never rendered (and never published, which is what keeps
+     * its connections on the primary). */
+    for(unsigned s=1;s<=o->slot_count && s<FF_TEMPLATE_SLOTS;s++) {
+        int rc=slot_template(&o->slots[s],&o->plan[FF_TEMPLATE_PLAN(0,s)]);
         if(rc==-1) goto bad_file;
         if(rc) goto bad;
     }
@@ -194,7 +192,7 @@ int ff_variants(const struct ff_options *o,struct ff_template out[][FF_TEMPLATE_
         /* Plans 0..FF_TEMPLATE_SLOTS-1 are the TCP slots and slot 0 mirrors the
          * primary template; UDP publishes only its slot 0. */
         unsigned slot=plan%FF_TEMPLATE_SLOTS;
-        if(plan<FF_TEMPLATE_SLOTS) {base=&o->extra[slot].tpl;host=o->extra[slot].hostname;}
+        if(plan<FF_TEMPLATE_SLOTS) {base=&o->slots[slot].tpl;host=o->slots[slot].hostname;}
         else if(plan==FF_TEMPLATE_PLAN(1,0)) base=&o->udp_template;
         else continue;
         unsigned count=p->variants?p->variants:1;

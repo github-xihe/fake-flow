@@ -292,39 +292,6 @@ def main():
                                       "{ configurable: true, get: () => 'visible' }); "
                                       "document.dispatchEvent(new Event('visibilitychange')); }")
                         expect(page.locator('#fakeflow-logs')).to_contain_text('visibility-probe-b', timeout=8000)
-                        # [[tcp.extra]]: the port-matched templates are an array of
-                        # tables, so a row can be added and previewed like an interface
-                        # row. Save through rpcd (blocking) instead of the button:
-                        # every rpcd method holds the config lock, so a click that
-                        # applies would race the next call.
-                        expect(page.get_by_text('额外 TCP 模板').first).to_be_visible(timeout=15000)
-                        page.locator('button.cbi-button-add').last.click()
-                        page.locator('input[id$=".hostname"]').last.fill('extra.example')
-                        page.locator('input[id$=".ports"]').last.fill('8080')
-                        page.locator('#ff-preview').click()
-                        preview = page.locator('.modal pre')
-                        expect(preview).to_contain_text('[[tcp.extra]]', timeout=15000)
-                        expect(preview).to_contain_text('hostname = "extra.example"')
-                        expect(preview).to_contain_text('ports = [8080]')
-                        generated = preview.inner_text()
-                        page.get_by_role('button', name='关闭', exact=True).click()
-                        save(rpc('get'), config=generated, apply=True)
-                        stored = rpc('get')
-                        assert '[[tcp.extra]]' in stored['config'], stored['config'][-400:]
-                        assert 'hostname = "extra.example"' in stored['config'], stored['config'][-400:]
-                        assert 'ports = [8080]' in stored['config'], stored['config'][-400:]
-                        # The https template set up earlier owns slot 1, so the extra
-                        # entry takes slot 2 and validate reports it on its own line:
-                        # 61 + len("extra.example") bytes is its ClientHello, which is
-                        # what proves the extra template was published, and in its own
-                        # slot rather than replacing the https one.
-                        validated = run('fakeflow validate --config /etc/fakeflow.toml')
-                        assert 'TCP extra template slot 2: 74 B' in (validated or ''), validated
-                        assert 'TCP port-matched template 72 B' in (validated or ''), validated
-                        page.reload()
-                        expect(page.locator('#fakeflow-status')).to_be_visible(timeout=30000)
-                        expect(page.locator('input[id$=".hostname"]')).to_have_value('extra.example', timeout=15000)
-                        expect(page.locator('input[id$=".ports"]')).to_have_value('8080')
                         # A console edit must not get overwritten by an old browser form.
                         run("printf '\\n# changed externally\\n' >> /etc/fakeflow.toml")
                         page.locator('.cbi-page-actions .cbi-button-save').click()

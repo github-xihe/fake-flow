@@ -46,18 +46,13 @@ int main(int argc,char **argv) {
         struct ff_options o;char error[512];
         if(ff_config_read(config,&o,error,sizeof(error))) {fprintf(stderr,"%s\n",error);return 1;}
         if(!strcmp(argv[1],"check")) return ff_check(&o);
-        /* The port-matched templates are reported only when the configuration
-         * defines them, so the existing line stays byte-identical otherwise; each
-         * additional slot gets its own line. */
-        unsigned top=0;
-        for(unsigned s=1;s<FF_TEMPLATE_SLOTS;s++) if(o.extra[s].tpl.len) top=s;
-        if(top)
+        /* The second template is reported only when the configuration defines it,
+         * so the existing line stays byte-identical otherwise. */
+        if(o.slots[1].tpl.len)
             printf("Configuration valid; TCP template %u B, TCP port-matched template %u B, UDP template %u B\n",
-                o.tcp_template.len,o.extra[1].tpl.len,o.udp_template.len);
+                o.tcp_template.len,o.slots[1].tpl.len,o.udp_template.len);
         else
             printf("Configuration valid; TCP template %u B, UDP template %u B\n",o.tcp_template.len,o.udp_template.len);
-        for(unsigned s=2;s<=top;s++)
-            printf("TCP extra template slot %u: %u B\n",s,o.extra[s].tpl.len);
         return 0;
     }
     if(!strcmp(argv[1],"status") || !strcmp(argv[1],"stats") ||

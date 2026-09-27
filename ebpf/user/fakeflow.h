@@ -16,17 +16,12 @@ struct ff_rand_field { __u16 off, bytes; };
  * lives inside the generator (the TLS ClientHello random). */
 enum ff_variant_kind { FF_VARIANT_SAME = 0, FF_VARIANT_PATCH, FF_VARIANT_RENDER };
 /* One TCP template slot. Slot 0 mirrors the primary template after parsing, so
- * the publish loop and the variant renderer treat every slot the same way; the
- * port-matched templates (`https_*`, then each `[[tcp.extra]]`) fill slots 1
- * upwards in configuration order. */
+ * the publish loop and the variant renderer treat both slots the same way; slot 1
+ * is the second template configured through the https_* keys. */
 struct ff_tcp_slot {
     char hostname[254], file[1024];
     struct ff_template tpl;
 };
-/* Payload a port-matched slot generates when no payload file is configured. The
- * https compatibility keys are always TLS, which is what they have always
- * produced; an `[[tcp.extra]]` entry picks one explicitly. */
-enum { FF_SLOT_TLS = 0, FF_SLOT_HTTP };
 /* One entry per published template, indexed by FF_TEMPLATE_PLAN(proto, slot). */
 struct ff_plan {
     unsigned kind, variants, rand_count;
@@ -42,13 +37,10 @@ struct ff_options {
      * https_hostname or https_file is set; the payload kind is implied by which
      * of the two was configured. */
     char https_hostname[254], https_file[1024];
-    /* Indexed by TCP slot, and always populated for the slots the configuration
-     * defines (slot 0 mirrors the primary template). extra_count is how many
-     * port-matched slots are in use, 0..FF_TCP_EXTRA_MAX. */
-    struct ff_tcp_slot extra[FF_TEMPLATE_SLOTS];
-    unsigned extra_count;
-    /* Payload each port-matched slot generates; see FF_SLOT_TLS/FF_SLOT_HTTP. */
-    unsigned extra_kind[FF_TEMPLATE_SLOTS];
+    /* Indexed by TCP slot: [0] mirrors the primary template, [1] is the second
+     * template. slot_count is how many port-matched slots exist, 0 or 1. */
+    struct ff_tcp_slot slots[FF_TEMPLATE_SLOTS];
+    unsigned slot_count;
     struct ff_template tcp_template, udp_template;
     struct ff_plan plan[FF_TEMPLATE_PLAN_COUNT];
 };

@@ -37,10 +37,6 @@ return view.extend({
 		var model, parseError;
 		try {
 			model = config.parse(data.config);
-			/* A JSONMap section reads its rows from the model key that matches the
-			 * section name, exactly like `interface` above; without this the table
-			 * comes up empty and the next save would drop the entries. */
-			model.extra = model.settings.tcp_extras;
 		}
 		catch (e) { parseError = e.message; model = { settings: { raw: data.config } }; }
 		this.rawMode = !!parseError;
@@ -71,14 +67,14 @@ return view.extend({
 			 * empty value: value() defaults to rmempty = false, and a visible
 			 * field with that setting fails form validation. The existing
 			 * payload_file is exempt only because depends() hides it. */
-			o = value(s, 'tcp', 'tcp_https_hostname', '端口匹配模板 1 · 伪装域名',
-				'可选。填了就在下面的端口上额外发送一份 TLS ClientHello，SNI 取此域名；与载荷文件只能填其一。对应配置项 https_hostname。');
+			o = value(s, 'tcp', 'tcp_https_hostname', '第二个 TCP 模板 · 伪装域名',
+				'可选。填了就在下面的端口上额外发送一份 TLS ClientHello（SNI 取此域名），其余端口仍用主模板；与载荷文件只能填其一。对应配置项 https_hostname。');
 			o.rmempty = true;
-			o = value(s, 'tcp', 'tcp_https_payload_file', '端口匹配模板 1 · 载荷文件',
+			o = value(s, 'tcp', 'tcp_https_payload_file', '第二个 TCP 模板 · 载荷文件',
 				'可选。路由器上已有的二进制文件，1–1200 字节；与伪装域名只能填其一。对应配置项 https_payload_file。');
 			o.rmempty = true;
-			o = value(s, 'tcp', 'tcp_https_ports', '端口匹配模板 1 · 端口',
-				'逗号分隔，最多 4 个，例如 443, 8443；留空按 443 处理。未命中的端口仍使用上面的主 TCP 模板。对应配置项 https_ports。');
+			o = value(s, 'tcp', 'tcp_https_ports', '第二个 TCP 模板 · 端口',
+				'逗号分隔，最多 4 个，例如 443, 8443；留空按 443 处理。未命中的端口仍使用上面的主模板。对应配置项 https_ports。');
 			o.rmempty = true;
 			select(s, 'tcp', 'tcp_tfo', 'TCP Fast Open', [['strip-syn', '把首个 SYN 里的 TFO 选项替换为空操作（NOP）'], ['preserve', '保留 TFO']]);
 			value(s, 'tcp', 'tcp_max_batches', '每次握手的注入批数上限', '范围 1–32；握手重传的注入批次间隔至少 200 ms。');
@@ -111,26 +107,6 @@ return view.extend({
 			decode(data.devices, []).forEach(function(d) { if (d.ifname) o.value(d.ifname); });
 			o = interfaces.option(form.ListValue, 'mode', '模式'); o.rmempty = false; o.default = 'pppoe';
 			o.value('pppoe', '物理 PPPoE'); o.value('ethernet', '普通以太网'); o.value('l3', 'L3 / 逻辑 PPP 接口');
-			/* One [[tcp.extra]] table each: another port-matched template. Its port
-			 * list is required, so an entry that is never reachable cannot be saved;
-			 * the optional fields accept an empty value and the combination rules are
-			 * reported by config.js with a per-entry message. */
-			var extras = m.section(form.TableSection, 'extra', '额外 TCP 模板',
-				'可选，最多 ' + config.extra_max + ' 个（与上面的「端口匹配模板 1」合计）；配置文件里写作 [[tcp.extra]]。命中自己端口列表的连接改发这份假载荷，其余端口仍用主 TCP 模板；端口不能与其他模板重复。');
-			extras.anonymous = true; extras.addremove = true; extras.sortable = true;
-			o = extras.option(form.Value, 'hostname', '伪装域名',
-				'TLS 时作为 SNI，HTTP 时作为 Host。可打印 ASCII、不含空格；与载荷文件只能填其一。');
-			o.rmempty = true;
-			o.validate = function(section, v) { return !v || /^[!-~]+$/.test(v) || '域名只能是可打印 ASCII，且不含空格。'; };
-			o = extras.option(form.ListValue, 'payload', '载荷类型', '仅有伪装域名时使用（TLS 时作为 SNI，HTTP 时作为 Host）；填了载荷文件则忽略。');
-			o.value('tls', 'TLS ClientHello'); o.value('http', 'HTTP 请求');
-			o.default = 'tls'; o.rmempty = true;
-			o = extras.option(form.Value, 'payload_file', '载荷文件路径',
-				'路由器上已有的二进制文件，1–1200 字节；填了就忽略上面的伪装域名与载荷类型。');
-			o.rmempty = true;
-			o = extras.option(form.Value, 'ports', '端口列表',
-				'必填，逗号分隔，最多 4 个，例如 8080 或 8000, 8001；它是选择这个模板的唯一依据。');
-			o.rmempty = true;
 		}
 		// Preview/validation also parse the JSONMap. Always read current inputs,
 		// including values changed back to their initial value after a preview.
@@ -236,19 +212,11 @@ return view.extend({
 			+ all.length + ' 行，显示 ' + shown.length + ' 行'
 			+ (all.length > shown.length ? '，已按级别隐藏 ' + (all.length - shown.length) + ' 行。' : '。');
 	},
-	container: function() { return this.map.data.sections('json', 'interface'); },
-	/* The array of tables lives in its own JSONMap section, like the
-	 * interfaces, and serialize() expects it on the settings object. */
-	settingsWithExtras: function() {
-		var settings = this.map.data.get('json', 'settings');
-		if (!this.rawMode) settings.tcp_extras = this.map.data.sections('json', 'extra');
-		return settings;
-	},
 	candidate: function() {
 		this.map.checkDepends();
 		return this.map.parse().then(function() {
-			var settings = this.settingsWithExtras();
-			return { config: this.rawMode ? settings.raw : config.serialize(settings, this.container()),
+			var settings = this.map.data.get('json', 'settings');
+			return { config: this.rawMode ? settings.raw : config.serialize(settings, this.map.data.sections('json', 'interface')),
 				enabled: settings.service_enabled === '1', autostart: settings.autostart === '1' };
 		}.bind(this));
 	},
