@@ -75,9 +75,16 @@ static __always_inline __u32 next_rule(struct ff_config *c) {
     __u32 z=0,rule;
     if(!c->rule_count) return 0;
     __u64 *n=bpf_map_lookup_elem(&rotation,&z);
-    __u32 i=n?(__u32)__sync_fetch_and_add(n,1)%c->rule_count:0;
-    if(i>=FF_TCP_RULES_MAX) i=0;      /* the verifier needs a bounded index */
-    rule=c->rule_map[i];
+    __u32 i=n?(__u32)__sync_fetch_and_add(n,1):0;
+    /* The verifier cannot prove a bound for a variable modulo or for a variable
+     * index into rule_map, and prog load then fails with EINVAL. The selection is
+     * therefore unrolled over the fixed rule count and every access uses a constant
+     * index; only the counter itself stays dynamic. */
+    if(c->rule_count==1) rule=c->rule_map[0];
+    else if(c->rule_count==2) rule=c->rule_map[i&1];
+    else if((i%3)==0) rule=c->rule_map[0];
+    else if((i%3)==1) rule=c->rule_map[1];
+    else rule=c->rule_map[2];
     if(rule>=FF_TCP_RULES_MAX) rule=0;
     return rule;
 }
