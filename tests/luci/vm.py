@@ -104,7 +104,7 @@ def main():
                                  enabled='1', autostart=True, apply=False), ok=False)
                 assert rpc('get')['revision'] == original['revision']
                 custom = original['config'].replace('type = "http"', 'type = "custom"').replace(
-                    'payload = "speed.gx.chinamobile.com"', 'payload = "/etc/fakehttp/payload.tls"')
+                    'payload = "www.example.com"', 'payload = "/etc/fakehttp/payload.tls"')
                 rpc('validate', {'config': custom}, ok=False)  # Missing payload must fail.
                 run("mkdir -p /etc/fakehttp; printf 'TEST-CUSTOM-PAYLOAD' > /etc/fakehttp/payload.tls")
                 save(original, config=custom)
@@ -190,7 +190,7 @@ def main():
                         # offers the three shapes. Editing rows through the table is covered by
                         # the serializer tests; here only the rendering is asserted.
                         tab("TCP")
-                        expect(page.get_by_text("speed.gx.chinamobile.com")).to_be_visible()
+                        expect(page.get_by_text("TCP 载荷规则")).to_be_visible()
                         expect(field("tcp_enabled")).to_be_checked()
                         expect(page.locator('.modal pre')).to_contain_text('initial_packets = 5')
                         page.get_by_role('button', name='关闭', exact=True).click()

@@ -15,7 +15,7 @@ max_batches = 3
 # custom（发文件原始字节，payload 写绝对路径）。最多 3 条，至少一条 enabled = true。
 [[tcp.rule]]
 type = "http"
-payload = "speed.gx.chinamobile.com"
+payload = "www.example.com"
 
 # [[tcp.rule]]
 # type = "tls"
