@@ -301,6 +301,42 @@ def main():
                         expect(page.locator('#fakeflow-status')).to_be_visible(timeout=30000)
                         tab('UDP')
                         expect(field('udp_initial_packets')).to_have_value('6')
+                        # LuCI marks an empty non-optional field invalid on every
+                        # dependency check (widget-change -> map.checkDepends ->
+                        # triggerValidation) and nothing clears that mark once
+                        # depends() hides the field, so picking 自定义文件 with no path
+                        # and then switching back left the tab carrying a "1 个无效字段"
+                        # tooltip aimed at a field that was no longer on screen. Both
+                        # conditional fields are optional in the form now and the rule
+                        # moved to config.js, which must still refuse such a config.
+                        tab('TCP')
+                        field('tcp_payload').select_option('custom')
+                        expect(field('tcp_payload_file')).to_be_visible()
+                        field('tcp_payload_file').fill('')
+                        field('tcp_payload').select_option('http')
+                        expect(field('tcp_payload_file')).not_to_be_visible()
+                        tab('注入')
+                        tab('TCP')
+                        marked = page.locator('.cbi-tabmenu [data-errors]')
+                        assert marked.count() == 0, [
+                            marked.nth(i).get_attribute('data-tooltip') for i in range(marked.count())]
+                        for key in ['tcp_hostname', 'tcp_payload_file']:
+                            assert 'cbi-input-invalid' not in (field(key).get_attribute('class') or ''), key
+                        field('tcp_payload').select_option('custom')
+                        page.locator('#ff-validate').click()
+                        expect(page.get_by_text('tcp.payload_file', exact=False).first).to_be_visible(timeout=15000)
+                        tab('UDP')
+                        field('udp_payload').select_option('custom')
+                        field('udp_payload_file').fill('')
+                        field('udp_payload').select_option('sip')
+                        tab('注入')
+                        tab('UDP')
+                        marked = page.locator('.cbi-tabmenu [data-errors]')
+                        assert marked.count() == 0, [
+                            marked.nth(i).get_attribute('data-tooltip') for i in range(marked.count())]
+                        for key in ['udp_sip_uri', 'udp_payload_file']:
+                            assert 'cbi-input-invalid' not in (field(key).get_attribute('class') or ''), key
+                        print('Conditional-field validity and the payload_file rule tests passed.')
                         page.set_viewport_size({'width': 390, 'height': 844})
                         page.screenshot(path='build/luci-mobile.png', full_page=True)
                         assert not errors, errors

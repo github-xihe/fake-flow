@@ -59,9 +59,19 @@ return view.extend({
 			select(s, 'tcp', 'tcp_directions', '连接方向', [
 				['both', '主动和被动连接'], ['active', '主动连接'], ['passive', '被动连接']]);
 			select(s, 'tcp', 'tcp_payload', '载荷类型', [['http', 'HTTP'], ['tls', 'TLS'], ['custom', '自定义文件']]);
+			/* A field that depends() hides must not stay "required" (rmempty =
+			 * false). LuCI's validation.js marks an empty non-optional field
+			 * invalid whenever a dependency recheck runs (form.js checkDepends ->
+			 * triggerValidation) and nothing clears that mark once the field is
+			 * hidden, so the next tab switch shows a "N 个无效字段" tooltip
+			 * pointing at a field that is no longer on screen. Which of these two
+			 * is actually needed depends on 载荷类型 — a condition LuCI cannot
+			 * express — so config.js enforces it and names the TOML path. */
 			var o = value(s, 'tcp', 'tcp_hostname', '伪装域名');
+			o.rmempty = true;
 			o.depends('tcp_payload', 'http'); o.depends('tcp_payload', 'tls');
 			o = value(s, 'tcp', 'tcp_payload_file', '载荷文件路径', '路由器上已有的二进制文件，1–1200 字节；例如 /etc/fakehttp/payload.tls。');
+			o.rmempty = true;
 			o.depends('tcp_payload', 'custom');
 			/* These three are optional and always visible, so they must accept an
 			 * empty value: value() defaults to rmempty = false, and a visible
@@ -82,9 +92,13 @@ return view.extend({
 			select(s, 'udp', 'udp_trigger', '入站触发', [['egress', '仅出站'], ['both', '双向']],
 				'双向模式只有在该流出现本地出站报文后，入站包才会触发向外发假包。');
 			select(s, 'udp', 'udp_payload', '载荷类型', [['sip', 'SIP'], ['custom', '自定义文件']]);
+			/* 同上：hidden 的条件字段不能是必填，否则 depends 隐藏后残留的无效标记会在
+			 * 切换页签时变成「N 个无效字段」提示；规则由 config.js 兜底。 */
 			o = value(s, 'udp', 'udp_sip_uri', 'SIP URI', '例如 sip:user@203.0.113.1；这是载荷中的文本，不是假包的实际目的地址。');
+			o.rmempty = true;
 			o.depends('udp_payload', 'sip');
 			o = value(s, 'udp', 'udp_payload_file', '载荷文件路径', '路由器上已有的二进制文件，1–1200 字节。');
+			o.rmempty = true;
 			o.depends('udp_payload', 'custom');
 			value(s, 'udp', 'udp_initial_packets', '初期报文数', '双向共享计数，范围 1–32。支持的 UDP 分片仅首片计数，后续片原样放行。');
 			value(s, 'udp', 'udp_idle_timeout_seconds', '空闲重置时间（秒）', '该流空闲超过此时间后，重新获得初期注入窗口。');

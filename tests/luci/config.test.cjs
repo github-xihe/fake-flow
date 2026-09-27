@@ -103,6 +103,35 @@ for (const off of [null, undefined, 0, ''])
 for (const bad of [{}, 5, ['a'], true])
   assert.throws(() => config.serialize({ ...model.settings, tcp_https_hostname: bad, tcp_https_payload_file: null },
     model.interface), /tcp\.https_hostname/);
+// 「载荷类型 = 自定义文件」时路径才是必填的。LuCI 表达不了这种条件必填（见下面对
+// rmempty 的断言），所以表单把这两个字段设成可选，由这里兜底：选了自定义文件却没给
+// 路径必须报错，否则会存下一份守护进程用不了的配置。
+for (const [settings, expected] of [
+  [{ ...model.settings, tcp_payload: 'custom', tcp_payload_file: '' }, /tcp\.payload_file/],
+  [{ ...model.settings, tcp_payload: 'custom', tcp_payload_file: null }, /tcp\.payload_file/],
+  [{ ...model.settings, udp_payload: 'custom', udp_payload_file: undefined }, /udp\.payload_file/]
+]) assert.throws(() => config.serialize(settings, model.interface), expected);
+{
+  const tcpText = config.serialize({ ...model.settings, tcp_payload: 'custom',
+    tcp_payload_file: '/etc/fakehttp/payload.tls' }, model.interface);
+  assert(tcpText.includes('payload_file = "/etc/fakehttp/payload.tls"'), tcpText);
+  assert(!tcpText.includes('\nhostname ='), tcpText);
+  const udpText = config.serialize({ ...model.settings, udp_payload: 'custom',
+    udp_payload_file: '/etc/fakehttp/sip.bin' }, model.interface);
+  assert(udpText.includes('payload_file = "/etc/fakehttp/sip.bin"'), udpText);
+  assert(!udpText.includes('\nsip_uri ='), udpText);
+}
+// 由 depends() 控制显示的字段不能是必填：validation.js 在每次依赖检查时会把空的必填
+// 字段标成无效，而 depends 把它隐藏之后没有任何代码清除那个标记 —— 页签上于是挂着
+// 「N 个无效字段」提示，指向一个已经看不见的字段（用户在路由器上遇到的就是这个）。
+for (const key of ['tcp_hostname', 'tcp_payload_file', 'udp_sip_uri', 'udp_payload_file']) {
+  const idx = viewSource.search(new RegExp("value\\(s, '[a-z]+', '" + key + "'"));
+  assert(idx >= 0, '视图里找不到字段 ' + key);
+  const snippet = viewSource.slice(idx, idx + 500);
+  assert(/\.depends\(/.test(snippet), key + ' 是 depends 条件字段');
+  assert(/rmempty = true/.test(snippet),
+    key + ' 由 depends 控制显示，不能设为必填（隐藏后残留的无效标记会变成页签上的「N 个无效字段」）');
+}
 // A JSONMap section renders the rows found under a model key of the same name:
 // `interface` comes from config.parse, so anything else must be assigned in the
 // view. Without it the table shows up empty and the next save drops the entries.

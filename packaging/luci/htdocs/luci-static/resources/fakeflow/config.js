@@ -149,6 +149,12 @@ function serialize(settings, interfaces) {
 	if (+settings.injection_burst < +settings.injection_repeat) throw new Error('突发容量不能小于每批副本数。');
 	if (settings.tcp_https_hostname && settings.tcp_https_payload_file)
 		throw new Error('第二个 TCP 模板只能填伪装域名或载荷文件其中之一。');
+	/* 「载荷类型选了自定义文件就必须给路径」这条规则是有条件的，表单层表达不了
+	 * （见 view/fakeflow.js 里 rmempty 的说明），所以在这里兜底，并按 TOML 路径报错。 */
+	if (settings.tcp_payload === 'custom' && !settings.tcp_payload_file)
+		throw new Error('tcp.payload_file: 载荷类型选择「自定义文件」时必须填写载荷文件路径。');
+	if (settings.udp_payload === 'custom' && !settings.udp_payload_file)
+		throw new Error('udp.payload_file: 载荷类型选择「自定义文件」时必须填写载荷文件路径。');
 	['tcp', 'udp', 'injection', 'runtime'].forEach(function(section) {
 		lines.push('', '[' + section + ']');
 		Object.keys(fields).forEach(function(id) {
